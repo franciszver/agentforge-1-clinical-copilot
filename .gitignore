@@ -51,3 +51,9 @@ docker/development-easy-redis/docker-compose.override.yml
 compose.override.yml
 tmp/
 .webpack-cache/
+
+# AgentForge Phase 1 PRD reference docs (kept local, not published)
+/prd/
+
+# Local research/planning notes (thoughts tooling)
+/thoughts/
