@@ -28,50 +28,29 @@ class BootstrapRegistrationTest extends TestCase
     {
         $this->projectDir = dirname(__DIR__, 5);
         $this->moduleBootstrapPath = $this->projectDir . DIRECTORY_SEPARATOR . 'interface' . DIRECTORY_SEPARATOR . 'modules' . DIRECTORY_SEPARATOR . 'custom_modules' . DIRECTORY_SEPARATOR . 'oe-module-clinical-copilot' . DIRECTORY_SEPARATOR . 'src';
+
+        $classLoader = new ModulesClassLoader($this->projectDir);
+        $classLoader->registerNamespaceIfNotExists(
+            'OpenEMR\\Modules\\ClinicalCopilot\\',
+            $this->moduleBootstrapPath
+        );
     }
 
     #[Test]
     public function testBootstrapClassExists(): void
     {
-        $classLoader = new ModulesClassLoader($this->projectDir);
-        $classLoader->registerNamespaceIfNotExists(
-            'OpenEMR\\Modules\\ClinicalCopilot\\',
-            $this->moduleBootstrapPath
-        );
-
         $this->assertTrue(class_exists('OpenEMR\\Modules\\ClinicalCopilot\\Bootstrap'), 'Bootstrap class should exist after namespace registration');
-    }
-
-    #[Test]
-    public function testBootstrapRegistersNamespaceViaModulesClassLoader(): void
-    {
-        $classLoader = new ModulesClassLoader($this->projectDir);
-
-        // Register the namespace - should not throw
-        $result = $classLoader->registerNamespaceIfNotExists(
-            'OpenEMR\\Modules\\ClinicalCopilot\\',
-            $this->moduleBootstrapPath
-        );
-
-        // Verify the class can be loaded after registration
-        $this->assertTrue(class_exists('OpenEMR\\Modules\\ClinicalCopilot\\Bootstrap'), 'Bootstrap class should be loadable after namespace registration');
     }
 
     #[Test]
     public function testBootstrapSubscribesToEvents(): void
     {
-        $classLoader = new ModulesClassLoader($this->projectDir);
-        $classLoader->registerNamespaceIfNotExists(
-            'OpenEMR\\Modules\\ClinicalCopilot\\',
-            $this->moduleBootstrapPath
-        );
-
         $eventDispatcher = new EventDispatcher();
         $bootstrapClass = 'OpenEMR\\Modules\\ClinicalCopilot\\Bootstrap';
         $bootstrap = new $bootstrapClass($eventDispatcher);
 
-        // Call subscribeToEvents - should not throw
-        $result = $bootstrap->subscribeToEvents();
-        $this->assertNull($result, 'subscribeToEvents should complete without error and return null');
+        // Construction and event subscription must complete without throwing.
+        $bootstrap->subscribeToEvents();
+        $this->expectNotToPerformAssertions();
     }
 }
