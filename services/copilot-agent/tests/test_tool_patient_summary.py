@@ -239,7 +239,7 @@ def test_live_get_patient_summary_against_dev_stack_demo_patient_phil():
                 mysql_container,
                 "sh",
                 "-c",
-                "($(command -v mariadb || command -v mysql)) -uopenemr -popenemr openemr -e "
+                "$(command -v mariadb || command -v mysql) -uopenemr -popenemr openemr -e "
                 f"\"UPDATE oauth_clients SET is_enabled=1 WHERE client_id='{creds.client_id}';\"",
             ],
             check=True,
