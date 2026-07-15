@@ -37,12 +37,9 @@ class ModuleManagerListener extends AbstractModuleActionListener
      */
     public function moduleManagerAction($methodName, $modId, string $currentActionStatus = 'Success'): string
     {
-        if (method_exists(self::class, $methodName)) {
-            return self::$methodName($modId, $currentActionStatus);
-        } else {
-            // no reason to report action method is missing.
-            return $currentActionStatus;
-        }
+        // This scaffold defines no per-action handling - Module Manager has
+        // already performed the action by the time this listener fires.
+        return $currentActionStatus;
     }
 
     /**

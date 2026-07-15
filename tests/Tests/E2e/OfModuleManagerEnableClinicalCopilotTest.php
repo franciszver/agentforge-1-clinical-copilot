@@ -24,8 +24,11 @@ declare(strict_types=1);
 
 namespace OpenEMR\Tests\E2e;
 
+use Facebook\WebDriver\WebDriver;
 use Facebook\WebDriver\WebDriverBy;
+use Facebook\WebDriver\WebDriverElement;
 use Facebook\WebDriver\WebDriverExpectedCondition;
+use OpenEMR\Common\Database\QueryUtils;
 use OpenEMR\Tests\E2e\Base\BaseTrait;
 use OpenEMR\Tests\E2e\Login\LoginTestData;
 use OpenEMR\Tests\E2e\Login\LoginTrait;
@@ -64,7 +67,7 @@ class OfModuleManagerEnableClinicalCopilotTest extends PantherTestCase
                 'Clinical Co-Pilot module should be visible in the Module Manager UI'
             );
 
-            if ((int) $moduleRow['sql_run'] === 0) {
+            if ($this->toDbInt($moduleRow['sql_run']) === 0) {
                 $this->clickModuleButton('Install');
                 $this->waitForModuleDbState('sql_run', 1);
                 $this->goToModuleManager();
@@ -75,7 +78,7 @@ class OfModuleManagerEnableClinicalCopilotTest extends PantherTestCase
                 $moduleRow,
                 'Clinical Co-Pilot module should still be registered in the database after install'
             );
-            if ((int) $moduleRow['mod_active'] === 0) {
+            if ($this->toDbInt($moduleRow['mod_active']) === 0) {
                 $this->clickModuleButton('Enable');
                 $this->waitForModuleDbState('mod_active', 1);
                 $this->goToModuleManager();
@@ -101,7 +104,7 @@ class OfModuleManagerEnableClinicalCopilotTest extends PantherTestCase
             $finalRow = $this->getModuleDbRow();
             $this->assertSame(
                 1,
-                (int) ($finalRow['mod_active'] ?? -1),
+                $finalRow !== false ? $this->toDbInt($finalRow['mod_active']) : -1,
                 'Clinical Co-Pilot module should have mod_active=1 in the database after enabling'
             );
         } catch (\Throwable $e) {
@@ -115,19 +118,24 @@ class OfModuleManagerEnableClinicalCopilotTest extends PantherTestCase
     {
         $this->client->request('GET', self::MODULE_MANAGER_URL);
         $this->client->wait(10)->until(
-            static fn($driver) => str_contains($driver->getPageSource(), 'Custom Module Listings')
+            static fn(WebDriver $driver) => str_contains($driver->getPageSource(), 'Custom Module Listings')
         );
     }
 
     /**
-     * @return array{mod_id: int|string, sql_run: int|string, mod_active: int|string}|false
+     * @return array<mixed>|false Row with mod_id, sql_run, mod_active keys
      */
     private function getModuleDbRow(): array|false
     {
-        return sqlQuery(
+        return QueryUtils::querySingleRow(
             "SELECT mod_id, sql_run, mod_active FROM modules WHERE mod_directory = ?",
             [self::MODULE_DIRECTORY]
         );
+    }
+
+    private function toDbInt(mixed $value): int
+    {
+        return is_numeric($value) ? (int) $value : 0;
     }
 
     private function getModuleUiRowText(): string
@@ -143,6 +151,9 @@ class OfModuleManagerEnableClinicalCopilotTest extends PantherTestCase
                 WebDriverBy::xpath(self::MODULE_ROW_XPATH . "//input[@value='{$buttonValue}']")
             )
         );
+        if (!$button instanceof WebDriverElement) {
+            $this->fail('Expected a clickable WebDriverElement for the "' . $buttonValue . '" button');
+        }
         $button->click();
     }
 
@@ -157,7 +168,7 @@ class OfModuleManagerEnableClinicalCopilotTest extends PantherTestCase
         $deadline = microtime(true) + $timeoutSeconds;
         do {
             $row = $this->getModuleDbRow();
-            if ($row !== false && (int) $row[$column] === $expectedValue) {
+            if ($row !== false && $this->toDbInt($row[$column]) === $expectedValue) {
                 return;
             }
             usleep(500_000);
