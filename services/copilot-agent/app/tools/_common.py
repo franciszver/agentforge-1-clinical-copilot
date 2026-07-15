@@ -16,8 +16,6 @@ implementation of the same lookup (P2.3, not otherwise broken).
 
 from __future__ import annotations
 
-from typing import Any
-
 from app.openemr_client import ErrorCategory, OpenEmrApiError, OpenEmrClient
 
 
