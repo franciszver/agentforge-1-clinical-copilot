@@ -6,6 +6,12 @@
 #   - a one-line generation prompt streams multiple non-empty JSON chunks
 #     from the /api/generate streaming endpoint
 #
+# The ollama image ships without curl/wget, and the ollama service runs on
+# the no-egress `copilot_internal` network so we can't apt-install one at
+# test time. Instead, a disposable curl container is attached to that same
+# internal network (by service DNS name) to make the HTTP call. This does
+# not grant the ollama runtime service itself any egress.
+#
 # Prerequisites (this script does NOT bring these up for you):
 #   1. Bring up the ollama service:
 #        docker compose -f docker-compose.yml -f docker-compose.copilot.yml up -d ollama
@@ -17,8 +23,10 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 compose_dir="${script_dir}/../docker/development-easy"
 compose_project="development-easy"
+internal_network="${compose_project}_copilot_internal"
+curl_image="curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69"
 
-MODEL="${MODEL:-qwen3:4b-instruct-2507}"
+MODEL="${MODEL:-qwen3:4b}"
 
 cd "${compose_dir}"
 
@@ -47,7 +55,9 @@ fi
 echo "Model present."
 
 echo "Requesting a one-line generation and checking for streamed tokens..."
-gen_output="$(compose exec -T ollama sh -c "curl -s http://localhost:11434/api/generate -d '{\"model\": \"${MODEL}\", \"prompt\": \"Reply with the single word: ok\"}'")"
+gen_output="$(docker run --rm --network "${internal_network}" "${curl_image}" \
+    -s http://ollama:11434/api/generate \
+    -d "{\"model\": \"${MODEL}\", \"prompt\": \"Reply with the single word: ok\"}")"
 
 if [[ -z "${gen_output}" ]]; then
     echo "FAIL: /api/generate returned empty output" >&2
