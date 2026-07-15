@@ -9,10 +9,16 @@
 # attached to it (in addition to its existing default network, which it
 # still needs for its own normal operation).
 #
+# This overlay touches `openemr` for two reasons: (a) attaching it to the
+# internal `copilot_internal` network so the agent can reach it, and
+# (b) setting DEMO_MODE: standard to load the OpenEMR demo dataset.
+#
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.copilot.yml up
 services:
   openemr:
+    environment:
+      DEMO_MODE: standard
     networks:
       - default
       - copilot_internal
