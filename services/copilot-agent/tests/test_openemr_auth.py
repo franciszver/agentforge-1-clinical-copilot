@@ -5,6 +5,8 @@ network. Live end-to-end verification lives in ``scripts/verify-oauth-dev.sh``,
 outside the test suite.
 """
 
+import json
+
 import httpx
 import pytest
 
@@ -21,6 +23,11 @@ from app.openemr_auth import (
 def test_register_client_returns_client_id_and_secret():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/oauth2/default/registration"
+        sent = json.loads(request.content)
+        # Confidential client: OpenEMR requires application_type=private for
+        # the user/* scopes this flow uses, and issues a client_secret for it.
+        assert sent["application_type"] == "private"
+        assert sent["token_endpoint_auth_method"] == "client_secret_post"
         return httpx.Response(
             201,
             json={
