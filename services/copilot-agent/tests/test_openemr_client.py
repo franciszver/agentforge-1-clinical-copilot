@@ -7,6 +7,7 @@ network. Live end-to-end verification lives outside the test suite.
 import httpx
 import pytest
 
+from app.config import Settings
 from app.openemr_client import ErrorCategory, OpenEmrApiError, OpenEmrClient
 
 
@@ -109,6 +110,7 @@ def test_get_rest_unexpected_status_raises_unexpected_without_leaking_body():
     assert secret_body not in str(excinfo.value)
 
 
+@pytest.mark.parametrize("method_name", ["get_rest", "get_fhir"])
 @pytest.mark.parametrize(
     "malicious_path",
     [
@@ -118,7 +120,7 @@ def test_get_rest_unexpected_status_raises_unexpected_without_leaking_body():
         "../../../etc/passwd",
     ],
 )
-def test_get_rest_rejects_paths_that_could_escape_the_configured_host(malicious_path):
+def test_rejects_paths_that_could_escape_the_configured_host(method_name, malicious_path):
     calls: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -126,32 +128,18 @@ def test_get_rest_rejects_paths_that_could_escape_the_configured_host(malicious_
         return httpx.Response(200, json={})
 
     client = _client(handler)
+    method = getattr(client, method_name)
     with pytest.raises(OpenEmrApiError) as excinfo:
-        client.get_rest(malicious_path, token="tok")
+        method(malicious_path, token="tok")
 
     assert excinfo.value.category == ErrorCategory.INVALID_PATH
     assert calls == []
 
 
-@pytest.mark.parametrize(
-    "malicious_path",
-    [
-        "https://evil.example/x",
-        "//evil.example/x",
-        "@evil.example",
-        "../../../etc/passwd",
-    ],
-)
-def test_get_fhir_rejects_paths_that_could_escape_the_configured_host(malicious_path):
-    calls: list[httpx.Request] = []
+def test_from_settings_builds_client_targeting_configured_base_url():
+    settings = Settings(openemr_base_url="https://openemr.example")
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(request)
-        return httpx.Response(200, json={})
+    client = OpenEmrClient.from_settings(settings)
 
-    client = _client(handler)
-    with pytest.raises(OpenEmrApiError) as excinfo:
-        client.get_fhir(malicious_path, token="tok")
-
-    assert excinfo.value.category == ErrorCategory.INVALID_PATH
-    assert calls == []
+    assert client._host == "openemr.example"
+    assert client._scheme == "https"
