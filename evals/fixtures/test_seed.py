@@ -41,7 +41,8 @@ def test_no_labs_patient_truly_has_no_labs() -> None:
     order_count = seed._query_one(f"SELECT COUNT(*) FROM procedure_order WHERE patient_id={pid};")
     result_count = seed._query_one(
         f"SELECT COUNT(*) FROM procedure_result pr "
-        f"JOIN procedure_order po ON pr.procedure_order_id = po.procedure_order_id "
+        f"JOIN procedure_report rep ON pr.procedure_report_id = rep.procedure_report_id "
+        f"JOIN procedure_order po ON rep.procedure_order_id = po.procedure_order_id "
         f"WHERE po.patient_id={pid};"
     )
     assert order_count == "0"
