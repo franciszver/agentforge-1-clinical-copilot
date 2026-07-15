@@ -63,7 +63,7 @@ final class CopilotPanelController
             </div>
         </div>
         <?php
-        return ob_get_clean();
+        return $this->endCapture();
     }
 
     /**
@@ -83,7 +83,7 @@ final class CopilotPanelController
         </button>
         <div id="copilot-chat-panel" class="copilot-chat-panel copilot-hidden" aria-hidden="true"></div>
         <?php
-        return ob_get_clean();
+        return $this->endCapture();
     }
 
     /**
@@ -111,6 +111,18 @@ final class CopilotPanelController
         </script>
         <script src="<?php echo attr($this->moduleUrl . '/public/assets/js/copilot.js'); ?>" defer></script>
         <?php
-        return ob_get_clean();
+        return $this->endCapture();
+    }
+
+    /**
+     * Close the output buffer opened by ob_start() and return its
+     * contents. ob_get_clean() only returns false when no buffer is
+     * active, which cannot happen on these paths; the check narrows
+     * string|false to string for the render methods' return types.
+     */
+    private function endCapture(): string
+    {
+        $html = ob_get_clean();
+        return is_string($html) ? $html : '';
     }
 }

@@ -75,16 +75,17 @@ class ClinicalCopilotPatientDashboardUiTest extends PantherTestCase
 
             $context = $this->client->executeScript('return window.CopilotContext;');
             $this->assertIsArray($context, 'window.CopilotContext should be defined by the injected panel script');
+            // The server emits these as JSON integers, so they arrive as PHP ints.
             $this->assertSame(
                 self::DEMO_PATIENT_PID,
-                (int) $context['pid'],
+                $context['pid'] ?? null,
                 'window.CopilotContext.pid should match the opened patient'
             );
 
             $adminUserId = $this->getAdminUserId();
             $this->assertSame(
                 $adminUserId,
-                (int) $context['authUserID'],
+                $context['authUserID'] ?? null,
                 'window.CopilotContext.authUserID should match the logged-in user'
             );
         } catch (\Throwable $e) {
@@ -102,9 +103,10 @@ class ClinicalCopilotPatientDashboardUiTest extends PantherTestCase
     private function getAdminUserId(): int
     {
         $row = QueryUtils::querySingleRow('SELECT id FROM users WHERE username = ?', [LoginTestData::username]);
-        if ($row === false || !isset($row['id'])) {
+        $id = is_array($row) ? ($row['id'] ?? null) : null;
+        if (!is_numeric($id)) {
             $this->fail('Could not resolve admin user id from users table');
         }
-        return (int) $row['id'];
+        return (int) $id;
     }
 }
