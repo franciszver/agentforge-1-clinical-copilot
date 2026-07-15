@@ -75,7 +75,7 @@ class ClinicalCopilotChatPanelTest extends PantherTestCase
             );
 
             $this->client->wait(self::ASSISTANT_REPLY_TIMEOUT_SECONDS, 500)->until(
-                fn($driver) => count($driver->findElements(
+                fn(\Facebook\WebDriver\WebDriver $driver) => count($driver->findElements(
                     WebDriverBy::xpath("//*[contains(@class,'copilot-chat-message-assistant')]")
                 )) > 0
             );
@@ -147,7 +147,8 @@ class ClinicalCopilotChatPanelTest extends PantherTestCase
                 JS;
             $raw = $this->client->executeScript($script, [self::CHAT_PROXY_PATH, $csrfToken]);
             $decoded = json_decode(is_string($raw) ? $raw : '', true);
-            $this->assertSame(400, $decoded['status'] ?? null, 'a missing token must be rejected');
+            $status = is_array($decoded) && is_int($decoded['status'] ?? null) ? $decoded['status'] : null;
+            $this->assertSame(400, $status, 'a missing token must be rejected');
         } finally {
             $this->client->quit();
         }
@@ -193,8 +194,8 @@ class ClinicalCopilotChatPanelTest extends PantherTestCase
         $this->assertTrue($input->isDisplayed(), 'chat input should be visible at the phone breakpoint');
         $this->assertTrue($send->isDisplayed(), 'send button should be visible at the phone breakpoint');
 
-        $viewportWidth = (int) $this->client->executeScript('return window.innerWidth;');
-        $viewportHeight = (int) $this->client->executeScript('return window.innerHeight;');
+        $viewportWidth = $this->executeScriptAsInt('return window.innerWidth;');
+        $viewportHeight = $this->executeScriptAsInt('return window.innerHeight;');
 
         $sendLocation = $send->getLocation();
         $sendSize = $send->getSize();
@@ -215,6 +216,15 @@ class ClinicalCopilotChatPanelTest extends PantherTestCase
             $sendLocation->getY(),
             'send button should sit in the lower (thumb-reachable) half of the viewport'
         );
+    }
+
+    private function executeScriptAsInt(string $script): int
+    {
+        $result = $this->client->executeScript($script);
+        if (!is_numeric($result)) {
+            $this->fail('executeScript() did not return a numeric value for: ' . $script);
+        }
+        return (int) $result;
     }
 
     /**
