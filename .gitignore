@@ -52,8 +52,11 @@ compose.override.yml
 tmp/
 .webpack-cache/
 
-# AgentForge Phase 1 PRD reference docs (kept local, not published)
+# AgentForge Phase 1 PRD reference docs and local planning (kept local, not published)
 /prd/
+
+# Decision log is kept local (lives at prd/DECISIONS.md); never re-add here
+/docs/DECISIONS.md
 
 # Local research/planning notes (thoughts tooling)
 /thoughts/
