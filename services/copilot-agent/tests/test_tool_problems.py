@@ -103,6 +103,32 @@ def test_happy_path_maps_problem_rows(make_openemr_client):
     assert inactive.status == ProblemStatus.INACTIVE
 
 
+def test_unrecognized_activity_maps_to_unknown_not_inactive(make_openemr_client):
+    """Clinical safety: an ``activity`` value outside {0, 1} (here missing)
+    must surface as UNKNOWN, never INACTIVE -- claiming a problem is inactive
+    when its state is genuinely unknown could hide a genuinely active one."""
+    body = {
+        "validationErrors": [],
+        "internalErrors": [],
+        "data": [
+            {"id": 9, "title": "Undetermined problem", "pid": 1, "begdate": None, "enddate": None, "diagnosis": ""},
+        ],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/apis/default/api/patient":
+            return httpx.Response(200, json=PATIENT_LIST_BODY)
+        if path == f"/apis/default/api/patient/{PHIL_UUID}/medical_problem":
+            return httpx.Response(200, json=body)
+        raise AssertionError(f"unexpected request: {path}")
+
+    result = get_problems(make_openemr_client(handler), token="tok", patient_id=1)
+
+    assert len(result.items) == 1
+    assert result.items[0].status == ProblemStatus.UNKNOWN
+
+
 def test_empty_problem_list_yields_empty_items_not_an_error(make_openemr_client):
     """OpenEMR quirk (same as allergy, P2.4): this uuid-keyed sub-resource
     returns 200 + {"data": []} for zero records, not a 404."""

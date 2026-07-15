@@ -163,6 +163,66 @@ def test_happy_path_maps_and_sorts_most_recent_first(make_openemr_client):
     assert third.abnormal_flag == AbnormalFlag.HIGH
 
 
+def test_unrecognized_interpretation_maps_to_unknown_not_normal(make_openemr_client):
+    """Clinical safety: an interpretation that *is* present but carries a code
+    this tool doesn't map (e.g. HL7 "A" = abnormal) must surface as UNKNOWN,
+    never as a falsely-reassuring NORMAL."""
+    bundle = {
+        "resourceType": "Bundle",
+        "type": "collection",
+        "total": 1,
+        "entry": [
+            _lab_entry(
+                obs_id="lab-abn",
+                display="Some Panel",
+                date="2024-05-01T10:00:00+00:00",
+                value=1.0,
+                unit="x",
+                interpretation_code="A",
+            ),
+        ],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/apis/default/api/patient":
+            return httpx.Response(200, json=PATIENT_LIST_BODY)
+        if path == "/apis/default/fhir/Observation":
+            return httpx.Response(200, json=bundle)
+        raise AssertionError(f"unexpected request: {path}")
+
+    result = get_recent_labs(make_openemr_client(handler), token="tok", patient_id=3)
+
+    assert len(result.items) == 1
+    assert result.items[0].abnormal_flag == AbnormalFlag.UNKNOWN
+
+
+def test_absent_interpretation_maps_to_normal(make_openemr_client):
+    """An Observation with no ``interpretation`` field at all is the standard
+    EHR "nothing flagged" case -> NORMAL (distinct from an unrecognized code)."""
+    bundle = {
+        "resourceType": "Bundle",
+        "type": "collection",
+        "total": 1,
+        "entry": [
+            _lab_entry(obs_id="lab-plain", display="Some Test", date="2024-05-01T10:00:00+00:00", value=1.0, unit="x"),
+        ],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/apis/default/api/patient":
+            return httpx.Response(200, json=PATIENT_LIST_BODY)
+        if path == "/apis/default/fhir/Observation":
+            return httpx.Response(200, json=bundle)
+        raise AssertionError(f"unexpected request: {path}")
+
+    result = get_recent_labs(make_openemr_client(handler), token="tok", patient_id=3)
+
+    assert len(result.items) == 1
+    assert result.items[0].abnormal_flag == AbnormalFlag.NORMAL
+
+
 def test_limit_filter_keeps_most_recent_n(make_openemr_client):
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path

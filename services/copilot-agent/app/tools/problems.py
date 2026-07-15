@@ -23,13 +23,14 @@ OpenEMR quirk (status vocabulary gap): the ``lists`` table backing this
 sub-resource has no dedicated problem-status column richer than the
 boolean-ish ``activity`` (1 = active, 0 = not active) and ``enddate`` (set
 when a problem is explicitly resolved) columns -- the same shape P2.4's
-``get_medications`` mapped ``activity`` from. Unlike ``MedicationStatus``,
-the ``ProblemStatus`` enum (app/schemas/common.py) has no ``UNKNOWN``
-member, so an ``activity`` value outside ``{0, 1}`` falls back to
-``INACTIVE`` (the safer bucket: it does not claim the problem is currently
-active, nor claim it was formally resolved) rather than a fourth enum value.
-Mapping: ``activity == 1`` -> ``ACTIVE``; ``activity == 0`` with a nonempty
-``enddate`` -> ``RESOLVED``; anything else -> ``INACTIVE``.
+``get_medications`` mapped ``activity`` from. As with ``MedicationStatus``,
+the ``ProblemStatus`` enum (app/schemas/common.py) carries an ``UNKNOWN``
+member for the ambiguous case. Mapping: ``activity == 1`` -> ``ACTIVE``;
+``activity == 0`` with a nonempty ``enddate`` -> ``RESOLVED``;
+``activity == 0`` without an ``enddate`` -> ``INACTIVE`` (OpenEMR's
+data-supported "not active"); any other ``activity`` value (missing, null,
+unexpected) -> ``UNKNOWN`` -- fail loud rather than claim ``INACTIVE`` and
+risk hiding a genuinely active problem.
 """
 
 from __future__ import annotations
@@ -71,9 +72,16 @@ def _icd_code(diagnosis: Any) -> str | None:
 def _map_status(activity: Any, enddate: Any) -> ProblemStatus:
     if activity == 1:
         return ProblemStatus.ACTIVE
-    if activity == 0 and isinstance(enddate, str) and enddate:
-        return ProblemStatus.RESOLVED
-    return ProblemStatus.INACTIVE
+    if activity == 0:
+        # 0 is OpenEMR's data-supported "not active"; an ``enddate`` marks a
+        # formally resolved problem, otherwise it is inactive.
+        if isinstance(enddate, str) and enddate:
+            return ProblemStatus.RESOLVED
+        return ProblemStatus.INACTIVE
+    # ``activity`` outside {0, 1} (missing/null/unexpected) -> we cannot tell
+    # whether the problem is active. Fail loud with UNKNOWN rather than claim
+    # INACTIVE and risk hiding a genuinely active problem.
+    return ProblemStatus.UNKNOWN
 
 
 def _parse_date(value: Any) -> datetime.date | None:

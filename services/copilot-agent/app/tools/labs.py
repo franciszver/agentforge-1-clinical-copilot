@@ -29,10 +29,14 @@ Value handling: unlike vitals, a lab result's value is not always numeric
 verbatim; if none are present the value is ``""``.
 
 Abnormal flag: read from the standard HL7 v3 ``ObservationInterpretation``
-codes (N/H/L/HH/LL). ``AbnormalFlag`` (app/schemas/common.py) has no
-``UNKNOWN`` member, so a missing or unrecognized interpretation falls back
-to ``NORMAL`` -- the common EHR convention where an absent flag means
-"nothing was flagged", not "unknown".
+codes (N/H/L/HH/LL). Two distinct cases are handled differently for
+clinical safety: an *absent* ``interpretation`` field maps to ``NORMAL``
+(the standard EHR convention where no flag means "nothing was flagged"),
+but an interpretation that *is* present yet carries no code this tool
+recognizes (e.g. the HL7 "A"/"AA" abnormal codes, which have no direction
+mappable onto HIGH/LOW) maps to ``AbnormalFlag.UNKNOWN`` -- never ``NORMAL``,
+so a possibly-abnormal result the system couldn't classify is surfaced as
+"interpretation not available" rather than falsely reassuring.
 
 ``limit``/``since`` filtering and the most-recent-first sort are applied
 client-side after fetching the full category Bundle. The FHIR endpoint
@@ -157,16 +161,26 @@ def _reference_range(ranges: Any) -> str | None:
 
 
 def _abnormal_flag(interpretation: Any) -> AbnormalFlag:
-    if isinstance(interpretation, list):
-        for item in interpretation:
-            if not isinstance(item, dict):
-                continue
-            codings = item.get("coding")
-            if not isinstance(codings, list):
-                continue
-            for coding in codings:
-                if isinstance(coding, dict):
-                    code = coding.get("code")
-                    if isinstance(code, str) and code in _ABNORMAL_FLAG_BY_CODE:
-                        return _ABNORMAL_FLAG_BY_CODE[code]
-    return AbnormalFlag.NORMAL
+    # No interpretation recorded at all -> nothing was flagged. An absent
+    # FHIR ``interpretation`` field is the standard EHR convention for "not
+    # flagged", distinct from an interpretation the system can't classify.
+    if not isinstance(interpretation, list) or not interpretation:
+        return AbnormalFlag.NORMAL
+
+    for item in interpretation:
+        if not isinstance(item, dict):
+            continue
+        codings = item.get("coding")
+        if not isinstance(codings, list):
+            continue
+        for coding in codings:
+            if isinstance(coding, dict):
+                code = coding.get("code")
+                if isinstance(code, str) and code in _ABNORMAL_FLAG_BY_CODE:
+                    return _ABNORMAL_FLAG_BY_CODE[code]
+
+    # An interpretation *is* present but no coding maps to a flag this tool
+    # recognizes (e.g. HL7 "A"/"AA" abnormal codes, which carry no direction
+    # mappable onto HIGH/LOW). Fail loud with UNKNOWN rather than claim NORMAL
+    # -- never label an unrecognized-but-present interpretation as normal.
+    return AbnormalFlag.UNKNOWN
