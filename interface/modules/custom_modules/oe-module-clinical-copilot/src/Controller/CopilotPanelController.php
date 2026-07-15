@@ -46,11 +46,6 @@ final class CopilotPanelController
         $this->moduleUrl = OEGlobalsBag::getInstance()->getWebRoot() . Bootstrap::MODULE_INSTALLATION_PATH;
     }
 
-    public function getPid(): int
-    {
-        return $this->pid;
-    }
-
     /**
      * Render the Co-Pilot card injected onto the patient dashboard.
      * Inert shell only - no chat behavior (see P2.14).
