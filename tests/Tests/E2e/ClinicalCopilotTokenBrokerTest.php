@@ -81,8 +81,8 @@ class ClinicalCopilotTokenBrokerTest extends PantherTestCase
             $auditRow = $this->latestChartAccessEvent($maxLogIdBefore);
             $this->assertNotNull($auditRow, 'broker must record a copilot-open audit event on a successful open');
             $this->assertSame(LoginTestData::username, $auditRow['user'], 'audit event must name the logged-in user');
-            $this->assertSame(self::DEMO_PATIENT_PID, (int) $auditRow['patient_id'], 'audit event must name the opened patient');
-            $this->assertSame('1', (string) $auditRow['success'], 'a successful open must be logged as success');
+            $this->assertSame(self::DEMO_PATIENT_PID, $auditRow['patient_id'], 'audit event must name the opened patient');
+            $this->assertSame('1', $auditRow['success'], 'a successful open must be logged as success');
 
             // Negative: a tampered CSRF token is rejected with no token leaked.
             $bad = $this->callBroker('POST', $csrfToken . 'tampered');
@@ -154,7 +154,7 @@ class ClinicalCopilotTokenBrokerTest extends PantherTestCase
     /**
      * The copilot-open audit event written after the given log id, if any.
      *
-     * @return array{user: string, patient_id: int|string|null, success: int|string}|null
+     * @return array{user: string, patient_id: int, success: string}|null
      */
     private function latestChartAccessEvent(int $afterLogId): ?array
     {
@@ -167,10 +167,13 @@ class ClinicalCopilotTokenBrokerTest extends PantherTestCase
             return null;
         }
 
+        $patientId = $row['patient_id'] ?? null;
+        $success = $row['success'] ?? null;
+
         return [
             'user' => is_string($row['user']) ? $row['user'] : '',
-            'patient_id' => $row['patient_id'] ?? null,
-            'success' => is_scalar($row['success']) ? $row['success'] : '',
+            'patient_id' => is_numeric($patientId) ? (int) $patientId : 0,
+            'success' => is_scalar($success) ? (string) $success : '',
         ];
     }
 }
