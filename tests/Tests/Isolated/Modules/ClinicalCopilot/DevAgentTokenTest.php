@@ -42,7 +42,7 @@ class DevAgentTokenTest extends TestCase
         $mint = self::CLASS_NAME . '::mint';
         $token = $mint(42, 'admin', 7, 'signing-key', 1_000_000, 3600);
 
-        $this->assertIsString($token);
+        $this->assertNotSame('', $token);
         $segments = explode('.', $token);
         $this->assertCount(2, $segments, 'token must be payload.signature');
         $this->assertNotSame('', $segments[0]);
