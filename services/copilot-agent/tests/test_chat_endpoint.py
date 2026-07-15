@@ -7,6 +7,7 @@ service is ever contacted. See ``app/chat.py`` for the seams.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 
 import pytest
@@ -61,6 +62,12 @@ def _iter_sse_events(text: str) -> list[tuple[str, str]]:
                 data_lines.append(line[len("data:") :].strip())
         events.append((event_name, "\n".join(data_lines)))
     return events
+
+
+def _conversation_id(response_text: str) -> str:
+    """Pull the ``conversation_id`` value out of the ``conversation`` frame."""
+    data = next(data for name, data in _iter_sse_events(response_text) if name == "conversation")
+    return json.loads(data)["conversation_id"]
 
 
 def _override_ok_validator() -> None:
@@ -121,9 +128,8 @@ def test_new_conversation_returns_a_fresh_conversation_id():
         headers={"Authorization": "Bearer good-token"},
     )
 
-    events = _iter_sse_events(response.text)
-    conversation_data = next(data for name, data in events if name == "conversation")
-    assert conversation_data  # non-empty conversation_id present in the frame
+    conversation_id = _conversation_id(response.text)
+    assert conversation_id  # non-empty conversation_id present in the frame
 
 
 def test_resume_with_same_conversation_id_continues_history():
@@ -139,9 +145,7 @@ def test_resume_with_same_conversation_id_continues_history():
         json={"message": "first question", "patient_id": 1},
         headers={"Authorization": "Bearer good-token"},
     )
-    conversation_id = next(
-        data for name, data in _iter_sse_events(first.text) if name == "conversation"
-    )
+    conversation_id = _conversation_id(first.text)
 
     second = client.post(
         "/chat",
@@ -153,9 +157,7 @@ def test_resume_with_same_conversation_id_continues_history():
         headers={"Authorization": "Bearer good-token"},
     )
     assert second.status_code == 200
-    second_conversation_id = next(
-        data for name, data in _iter_sse_events(second.text) if name == "conversation"
-    )
+    second_conversation_id = _conversation_id(second.text)
     assert second_conversation_id == conversation_id
 
     # The store now holds both turns for this conversation.
@@ -178,9 +180,7 @@ def test_resume_with_mismatched_patient_id_is_rejected():
         json={"message": "first question", "patient_id": 1},
         headers={"Authorization": "Bearer good-token"},
     )
-    conversation_id = next(
-        data for name, data in _iter_sse_events(first.text) if name == "conversation"
-    )
+    conversation_id = _conversation_id(first.text)
 
     second = client.post(
         "/chat",
