@@ -3,8 +3,15 @@
 /**
  * Module Manager Enable Clinical Co-Pilot Test
  *
- * Test that the Clinical Co-Pilot module can be registered and enabled
- * through the Module Manager UI without errors.
+ * Drives the Module Manager UI through register -> install -> enable for
+ * the Clinical Co-Pilot module and verifies it reaches an enabled state
+ * (mod_active=1 in the `modules` table), not merely that it is discoverable.
+ *
+ * Each step clicks the real UI button, then confirms the persisted database
+ * state rather than racing the page's client-side reload - the reload
+ * timing after each ajax action is unreliable to observe via polling DOM
+ * text under Selenium/Chrome, even though the underlying action completes
+ * quickly and reliably server-side.
  *
  * @package   OpenEMR
  * @link      https://www.open-emr.org
@@ -18,6 +25,7 @@ declare(strict_types=1);
 namespace OpenEMR\Tests\E2e;
 
 use Facebook\WebDriver\WebDriverBy;
+use Facebook\WebDriver\WebDriverExpectedCondition;
 use OpenEMR\Tests\E2e\Base\BaseTrait;
 use OpenEMR\Tests\E2e\Login\LoginTestData;
 use OpenEMR\Tests\E2e\Login\LoginTrait;
@@ -29,88 +37,132 @@ class OfModuleManagerEnableClinicalCopilotTest extends PantherTestCase
     use BaseTrait;
     use LoginTrait;
 
+    private const MODULE_ROW_XPATH = "//tr[contains(., 'Clinical Co-Pilot')]";
+    private const MODULE_DIRECTORY = 'oe-module-clinical-copilot';
+    // Module Manager is mounted at this exact path (no trailing "/index").
+    // The page's Action column links use relative URLs (e.g.
+    // "./Installer/manage") that resolve against the current path, so a
+    // literal "/index" segment would double up to
+    // ".../Installer/Installer/manage" and 404.
+    private const MODULE_MANAGER_URL = '/interface/modules/zend_modules/public/Installer?testing_mode=1';
+
     #[Test]
-    public function testModuleCanBeDiscoveredInModuleManager(): void
+    public function testModuleEnablesViaModuleManagerWithoutError(): void
     {
         $this->base();
         try {
-            // Log in as admin
             $this->login(LoginTestData::username, LoginTestData::password);
+            $this->goToModuleManager();
 
-            // Navigate to Module Manager
-            $this->client->request('GET', '/Installer/index?testing_mode=1');
-
-            // Wait for page to load
-            $this->client->wait(10)->until(
-                static fn($driver) => strlen($driver->getPageSource()) > 100
+            $moduleRow = $this->getModuleDbRow();
+            $this->assertNotFalse(
+                $moduleRow,
+                'Clinical Co-Pilot module should be auto-registered in the database after visiting Module Manager'
+            );
+            $this->assertNotEmpty(
+                $this->getModuleUiRowText(),
+                'Clinical Co-Pilot module should be visible in the Module Manager UI'
             );
 
-            // Verify the page loaded with module content
-            $pageContent = $this->client->getPageSource();
-            $this->assertNotEmpty($pageContent, 'Module Manager page should have content');
-
-            // Look for evidence that the module manager is working
-            // (it should have some indication of available modules)
-            $this->assertStringContainsString(
-                'module',
-                strtolower($pageContent),
-                'Module Manager page should contain module-related content'
-            );
-
-            // Check if Clinical Co-Pilot module is discovered
-            // Look for the module by its directory name or display name
-            $foundClinicalCopilot = (
-                strpos($pageContent, 'clinical-copilot') !== false ||
-                strpos($pageContent, 'Clinical Co-Pilot') !== false ||
-                strpos($pageContent, 'oe-module-clinical-copilot') !== false
-            );
-
-            if ($foundClinicalCopilot) {
-                // Module was discovered - try to enable it
-                $moduleRows = $this->client->findElements(
-                    WebDriverBy::xpath("//tr[contains(., 'clinical-copilot') or contains(., 'Clinical Co-Pilot') or contains(., 'oe-module-clinical-copilot')]")
-                );
-
-                $this->assertNotEmpty($moduleRows, 'Module row should be found in the table');
-
-                // Try to find and click the enable button if available
-                // This is a "nice to have" - the main test is just that the module is discoverable
-                try {
-                    $enableButtons = $moduleRows[0]->findElements(
-                        WebDriverBy::xpath(".//button[contains(., 'Enable')]")
-                    );
-                    if (!empty($enableButtons)) {
-                        $enableButtons[0]->click();
-                        // Wait a moment for the action to complete
-                        sleep(2);
-                    }
-                } catch (\Throwable $e) {
-                    // Button click might fail but that's okay - main test passed
-                }
-            } else {
-                // Module not found in UI - might be unregistered yet
-                // Check if it can be registered by looking for register buttons with our module name
-                $this->markTestIncomplete(
-                    'Clinical Co-Pilot module not yet visible in Module Manager. ' .
-                    'The module directory exists and should be auto-discovered on next Module Manager visit.'
-                );
+            if ((int) $moduleRow['sql_run'] === 0) {
+                $this->clickModuleButton('Install');
+                $this->waitForModuleDbState('sql_run', 1);
+                $this->goToModuleManager();
             }
 
-            // Verify no critical errors on the page
+            $moduleRow = $this->getModuleDbRow();
+            $this->assertNotFalse(
+                $moduleRow,
+                'Clinical Co-Pilot module should still be registered in the database after install'
+            );
+            if ((int) $moduleRow['mod_active'] === 0) {
+                $this->clickModuleButton('Enable');
+                $this->waitForModuleDbState('mod_active', 1);
+                $this->goToModuleManager();
+            }
+
+            $this->assertStringContainsString(
+                'Active',
+                $this->getModuleUiRowText(),
+                'Clinical Co-Pilot module should show Active status in the Module Manager UI after enabling'
+            );
+
+            // Verify no critical error alerts surfaced during the flow.
             $errorElements = $this->client->findElements(
                 WebDriverBy::xpath("//div[contains(@class, 'alert-danger')]")
             );
             $this->assertEmpty(
                 $errorElements,
-                'Module Manager should not show critical error alerts'
+                'Module Manager should not show critical error alerts after enabling the module'
+            );
+
+            // Final, authoritative check: the enabled state is persisted -
+            // the actual acceptance criterion, independent of UI rendering.
+            $finalRow = $this->getModuleDbRow();
+            $this->assertSame(
+                1,
+                (int) ($finalRow['mod_active'] ?? -1),
+                'Clinical Co-Pilot module should have mod_active=1 in the database after enabling'
             );
         } catch (\Throwable $e) {
-            // Close client
             $this->client->quit();
-            // re-throw the exception
             throw $e;
         }
-        // Close client
         $this->client->quit();
+    }
+
+    private function goToModuleManager(): void
+    {
+        $this->client->request('GET', self::MODULE_MANAGER_URL);
+        $this->client->wait(10)->until(
+            static fn($driver) => str_contains($driver->getPageSource(), 'Custom Module Listings')
+        );
+    }
+
+    /**
+     * @return array{mod_id: int|string, sql_run: int|string, mod_active: int|string}|false
+     */
+    private function getModuleDbRow(): array|false
+    {
+        return sqlQuery(
+            "SELECT mod_id, sql_run, mod_active FROM modules WHERE mod_directory = ?",
+            [self::MODULE_DIRECTORY]
+        );
+    }
+
+    private function getModuleUiRowText(): string
+    {
+        $rows = $this->client->findElements(WebDriverBy::xpath(self::MODULE_ROW_XPATH));
+        return ($rows[0] ?? null)?->getText() ?? '';
+    }
+
+    private function clickModuleButton(string $buttonValue): void
+    {
+        $button = $this->client->wait(10)->until(
+            WebDriverExpectedCondition::elementToBeClickable(
+                WebDriverBy::xpath(self::MODULE_ROW_XPATH . "//input[@value='{$buttonValue}']")
+            )
+        );
+        $button->click();
+    }
+
+    /**
+     * Poll the database directly for the expected column value. The click
+     * triggers a server-side ajax action that completes quickly, but the
+     * client-side page reload that follows it is not reliably observable
+     * via DOM polling, so the database is the synchronization point.
+     */
+    private function waitForModuleDbState(string $column, int $expectedValue, int $timeoutSeconds = 20): void
+    {
+        $deadline = microtime(true) + $timeoutSeconds;
+        do {
+            $row = $this->getModuleDbRow();
+            if ($row !== false && (int) $row[$column] === $expectedValue) {
+                return;
+            }
+            usleep(500_000);
+        } while (microtime(true) < $deadline);
+
+        $this->fail("Timed out waiting for Clinical Co-Pilot module '{$column}' to become {$expectedValue}");
     }
 }
