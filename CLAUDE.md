@@ -1,5 +1,52 @@
 # OpenEMR Development Guide
 
+## Clinical Co-Pilot Development Operations (READ FIRST)
+
+This repo hosts the **Clinical Co-Pilot** project on an OpenEMR base. All new
+development follows the execution model below — it overrides any conflicting
+default workflow. Canonical references: `docs/DEVELOPERS_GUIDE.md` (orientation),
+`docs/TEST_PLAN.md` (testing, living), `docs/IMPLEMENTATION_PLAN.md` (frozen plan),
+and the GitHub Project board (live operational plan; URL in README.md).
+
+### Hard invariants — no exceptions
+
+1. **Nothing reaches `main` without a feature branch and a PR.** No direct
+   pushes, no "quick fixes" on main. Branch protection enforces this.
+2. **Every PR is tracked by a GitHub Project board issue**, linked via
+   `Closes #N`. A PR with no linked issue does not merge. Unplanned work
+   discovered mid-task gets an issue created on the board *first* (with
+   acceptance criteria), then a branch — the board never lags reality.
+
+### Agent roles
+
+- **Orchestrator (Fable):** plans, sequences, spawns subagents, merges,
+  updates the board. **Never edits files directly.**
+- **Implementation:** Sonnet subagents for all implementation; Haiku only for
+  pure boilerplate (scaffolding, fixtures, config).
+- **Review:** every diff is reviewed by a **fresh agent on an equal-or-better
+  model** before the commit lands — Haiku diffs → Sonnet reviews; Sonnet
+  diffs → Opus reviews. All findings fixed and tests re-run green first.
+
+### Per-task pipeline (one issue = one branch = one PR)
+
+1. Board issue → *In Progress*; branch `feat/p<N>-<slug>` (or `fix/`,
+   `docs/`, `ci/`) off `main`.
+2. **Red first — strict TDD, everywhere:** the failing artifact is committed
+   *before* implementation (pytest / PHPUnit / Jest / eval case / Panther
+   scenario — see `docs/TEST_PLAN.md` §1 for which artifact per code type).
+3. Implement to green; refactor; commit at each green boundary
+   (conventional commits + `Assisted-by` trailer).
+4. **Three gates on the full PR diff before any push toward main:**
+   `/simplify` → `/security-review` → `/code-review`. Every finding fixed,
+   full test suite re-run green after fixes. No exceptions, including docs PRs.
+5. Push branch, open PR (`Closes #N`); CI (`copilot-ci.yml`) must pass.
+6. Merge; issue auto-closes; board updates.
+
+The full PR Definition of Done checklist lives in `docs/TEST_PLAN.md` §3.
+Co-Pilot code lives in `services/copilot-agent/` (FastAPI agent),
+`interface/modules/custom_modules/oe-module-clinical-copilot/` (OpenEMR
+module), and `evals/` (eval suite).
+
 ## Project Structure
 
 ```
