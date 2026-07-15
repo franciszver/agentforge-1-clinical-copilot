@@ -74,16 +74,16 @@ final class CopilotStandaloneController
     <title><?php echo xlt('Co-Pilot'); ?></title>
     <meta name="theme-color" content="#0b5a8a">
     <link rel="manifest" href="<?php echo attr($manifestUrl); ?>">
-    <?php echo $this->panel->renderAssetTags(); ?>
+        <?php echo $this->panel->renderAssetTags(); ?>
 </head>
 <body class="copilot-standalone-body">
-<?php if (self::hasPatientContext($this->pid)) { ?>
-    <?php echo $this->panel->renderChatPanel(true); ?>
-<?php } else { ?>
+        <?php if (self::hasPatientContext($this->pid)) { ?>
+            <?php echo $this->panel->renderChatPanel(true); ?>
+        <?php } else { ?>
     <div id="copilot-standalone-empty-state" class="copilot-standalone-empty-state">
         <p><?php echo xlt('Open a patient chart first to start a Co-Pilot conversation.'); ?></p>
     </div>
-<?php } ?>
+        <?php } ?>
 <script>
     if ('serviceWorker' in navigator) {
         // Default scope is the script's own directory (public/), which
