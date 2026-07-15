@@ -18,6 +18,8 @@
  * @license   https://github.com/openemr/openemr/blob/master/LICENSE GNU General Public License 3
  */
 
+declare(strict_types=1);
+
 use OpenEMR\Core\AbstractModuleActionListener;
 
 class ModuleManagerListener extends AbstractModuleActionListener
@@ -65,53 +67,5 @@ class ModuleManagerListener extends AbstractModuleActionListener
     public static function initListenerSelf(): ModuleManagerListener
     {
         return new self();
-    }
-
-    /**
-     * @param $modId
-     * @param $currentActionStatus
-     * @return mixed
-     */
-    private function install($modId, $currentActionStatus): mixed
-    {
-        // Activate module state after installation
-        self::setModuleState($modId, '0', '1');
-        return $currentActionStatus;
-    }
-
-    /**
-     * @param $modId
-     * @param $currentActionStatus
-     * @return mixed
-     */
-    private function enable($modId, $currentActionStatus): mixed
-    {
-        self::setModuleState($modId, '1', '0');
-        return $currentActionStatus;
-    }
-
-    /**
-     * @param $modId
-     * @param $currentActionStatus
-     * @return mixed
-     */
-    private function disable($modId, $currentActionStatus): mixed
-    {
-        self::setModuleState($modId, '0', '1');
-        return $currentActionStatus;
-    }
-
-    /**
-     * @param      $modId
-     * @param      $modDirectory
-     * @param int  $flag
-     * @param int  $flag_ui
-     * @return bool
-     */
-    private static function setModuleState(int|string $modId, int|string $flag, int|string $flag_ui): bool
-    {
-        // This method sets the module state through AbstractModuleActionListener
-        // which uses the repository to update module state in the database.
-        return true;
     }
 }
