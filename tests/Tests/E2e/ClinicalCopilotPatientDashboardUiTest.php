@@ -92,11 +92,9 @@ class ClinicalCopilotPatientDashboardUiTest extends PantherTestCase
                 $context['authUserID'] ?? null,
                 'window.CopilotContext.authUserID should match the logged-in user'
             );
-        } catch (\Throwable $e) {
+        } finally {
             $this->client->quit();
-            throw $e;
         }
-        $this->client->quit();
     }
 
     private function openPatientDashboard(int $pid): void

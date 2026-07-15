@@ -22,7 +22,9 @@
     border: 1px solid #dee2e6;
     border-radius: 0.25rem;
     box-shadow: 0 5px 15px rgba(0, 0, 0, 0.25);
-    z-index: 1040;
+    /* Above Bootstrap's fixed elements (1030) but below .modal-backdrop
+       (1040) so open modals always win over the chat panel. */
+    z-index: 1035;
 }
 
 .copilot-hidden {

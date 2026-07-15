@@ -14,6 +14,7 @@ declare(strict_types=1);
 
 namespace OpenEMR\Modules\ClinicalCopilot;
 
+use OpenEMR\Common\Session\PatientSessionUtil;
 use OpenEMR\Events\PatientDemographics\RenderEvent as PatientDemographicsRenderEvent;
 use OpenEMR\Events\UserInterface\PageHeadingRenderEvent;
 use OpenEMR\Modules\ClinicalCopilot\Controller\CopilotPanelController;
@@ -76,8 +77,12 @@ class Bootstrap
      */
     public function renderCopilotCard(PatientDemographicsRenderEvent $event): void
     {
+        // The event's pid is untyped and can carry a raw request value
+        // (see demographics.php), so normalize before comparing: a
+        // non-numeric string would otherwise slip past a bare `<= 0`
+        // check under PHP 8 string-comparison semantics.
         $pid = $event->getPid();
-        if ($pid === null || $pid <= 0) {
+        if (!is_numeric($pid) || (int) $pid <= 0) {
             return;
         }
 
@@ -96,6 +101,11 @@ class Bootstrap
     public function renderOpenChatButton(PageHeadingRenderEvent $event): PageHeadingRenderEvent
     {
         if ($event->getPageId() !== self::PATIENT_DASHBOARD_PAGE_ID) {
+            return $event;
+        }
+        // Same "no widget without a patient" gate as the card; this event
+        // carries no pid, so read the normalized session value.
+        if (PatientSessionUtil::getPid() <= 0) {
             return $event;
         }
 
