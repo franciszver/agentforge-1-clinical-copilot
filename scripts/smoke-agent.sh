@@ -24,13 +24,35 @@ docker run -d --rm --name "${container}" -p "${port}:8000" "${image}" >/dev/null
 echo "Waiting for /health to return 200..."
 for _ in $(seq 1 20); do
     if status="$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${port}/health" 2>/dev/null)" && [[ "${status}" == "200" ]]; then
-        echo "AGENT BOOT SMOKE OK"
-        exit 0
+        break
     fi
     sleep 1
 done
 
-echo "FAIL: /health never returned 200 within 20s" >&2
+if [[ "${status}" != "200" ]]; then
+    echo "FAIL: /health never returned 200 within 20s" >&2
+    echo "Container logs:" >&2
+    docker logs "${container}" >&2 || true
+    exit 1
+fi
+
+echo "Checking /ready trace_store writability..."
+for _ in $(seq 1 10); do
+    ready_response="$(curl -s "http://localhost:${port}/ready" 2>/dev/null)"
+    # Extract trace_store.ok using grep + sed to avoid jq dependency
+    if trace_ok="$(echo "${ready_response}" | grep -o '"trace_store":[^}]*' | grep -o '"ok":[^,}]*' | cut -d':' -f2)"; then
+        if [[ "${trace_ok}" == "true" ]]; then
+            echo "AGENT BOOT SMOKE OK"
+            exit 0
+        fi
+    fi
+    sleep 1
+done
+
+echo "FAIL: /ready trace_store.ok never became true within 10s" >&2
+echo "Final /ready response:" >&2
+curl -s "http://localhost:${port}/ready" >&2 || true
+echo "" >&2
 echo "Container logs:" >&2
 docker logs "${container}" >&2 || true
 exit 1
