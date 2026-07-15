@@ -4,8 +4,9 @@
  * Clinical Co-Pilot Patient Dashboard UI Injection Test
  *
  * Verifies the Clinical Co-Pilot module injects a Co-Pilot card (via
- * PatientSummaryCard\RenderEvent::EVENT_HANDLE) and a persistent open-chat
- * button (via PageHeadingRenderEvent) onto the patient dashboard, and that
+ * PatientDemographics RenderEvent::EVENT_SECTION_LIST_RENDER_BEFORE) and a
+ * persistent open-chat button (via PageHeadingRenderEvent) onto the patient
+ * dashboard, and that
  * both carry the current session context (pid, encounter, authUserID)
  * escaped into the page for the panel JS to read. Runs at both a desktop
  * and a phone viewport since the elements must render at both.
@@ -28,12 +29,15 @@ use OpenEMR\Tests\E2e\Base\BaseTrait;
 use OpenEMR\Tests\E2e\Login\LoginTestData;
 use OpenEMR\Tests\E2e\Login\LoginTrait;
 use PHPUnit\Framework\Attributes\Test;
+use Symfony\Component\DomCrawler\Crawler;
 use Symfony\Component\Panther\PantherTestCase;
 
 class ClinicalCopilotPatientDashboardUiTest extends PantherTestCase
 {
     use BaseTrait;
     use LoginTrait;
+
+    private ?Crawler $crawler = null;
 
     private const DEMO_PATIENT_PID = 1;
 

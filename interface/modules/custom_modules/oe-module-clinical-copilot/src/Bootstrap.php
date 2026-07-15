@@ -14,8 +14,7 @@ declare(strict_types=1);
 
 namespace OpenEMR\Modules\ClinicalCopilot;
 
-use OpenEMR\Common\Session\PatientSessionUtil;
-use OpenEMR\Events\Patient\Summary\Card\RenderEvent as PatientSummaryCardRenderEvent;
+use OpenEMR\Events\PatientDemographics\RenderEvent as PatientDemographicsRenderEvent;
 use OpenEMR\Events\UserInterface\PageHeadingRenderEvent;
 use OpenEMR\Modules\ClinicalCopilot\Controller\CopilotPanelController;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
@@ -30,15 +29,6 @@ class Bootstrap
      * by OemrUI::pageHeading() (see interface/patient_file/summary/demographics.php).
      */
     private const PATIENT_DASHBOARD_PAGE_ID = 'core.mrd';
-
-    /**
-     * PatientSummaryCard\RenderEvent::EVENT_HANDLE fires once per existing
-     * dashboard card (note, reminder, lab, ...), each individually gated by
-     * its own ACL/feature-flag check. Render the Co-Pilot card on whichever
-     * fires first so injection doesn't depend on any single card being
-     * enabled for the current user.
-     */
-    private bool $cardRendered = false;
 
     /**
      * The module's CSS/JS asset tags only need to be emitted once per
@@ -64,7 +54,7 @@ class Bootstrap
     public function subscribeToEvents(): void
     {
         $this->eventDispatcher->addListener(
-            PatientSummaryCardRenderEvent::EVENT_HANDLE,
+            PatientDemographicsRenderEvent::EVENT_SECTION_LIST_RENDER_BEFORE,
             $this->renderCopilotCard(...)
         );
         $this->eventDispatcher->addListener(
@@ -76,18 +66,20 @@ class Bootstrap
     /**
      * Inject the Co-Pilot card onto the patient dashboard.
      *
-     * @param PatientSummaryCardRenderEvent $event
+     * EVENT_SECTION_LIST_RENDER_BEFORE is dispatched exactly once,
+     * unconditionally, before the dashboard card list (see
+     * interface/patient_file/summary/demographics.php), so the card renders
+     * regardless of which other cards the current user's ACLs allow.
+     *
+     * @param PatientDemographicsRenderEvent $event
      * @return void
      */
-    public function renderCopilotCard(PatientSummaryCardRenderEvent $event): void
+    public function renderCopilotCard(PatientDemographicsRenderEvent $event): void
     {
-        if ($this->cardRendered) {
+        $pid = $event->getPid();
+        if ($pid === null || $pid <= 0) {
             return;
         }
-        if (PatientSessionUtil::getPid() <= 0) {
-            return;
-        }
-        $this->cardRendered = true;
 
         $controller = new CopilotPanelController();
         echo $this->renderAssetsOnce($controller);

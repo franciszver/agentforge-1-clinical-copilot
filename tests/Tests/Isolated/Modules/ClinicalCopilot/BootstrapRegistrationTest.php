@@ -15,7 +15,7 @@ declare(strict_types=1);
 namespace OpenEMR\Tests\Isolated\Modules\ClinicalCopilot;
 
 use OpenEMR\Core\ModulesClassLoader;
-use OpenEMR\Events\Patient\Summary\Card\RenderEvent as PatientSummaryCardRenderEvent;
+use OpenEMR\Events\PatientDemographics\RenderEvent as PatientDemographicsRenderEvent;
 use OpenEMR\Events\UserInterface\PageHeadingRenderEvent;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
@@ -45,7 +45,7 @@ class BootstrapRegistrationTest extends TestCase
     }
 
     #[Test]
-    public function testBootstrapRegistersPatientSummaryCardAndPageHeadingListeners(): void
+    public function testBootstrapRegistersPatientDemographicsAndPageHeadingListeners(): void
     {
         $eventDispatcher = new EventDispatcher();
         $bootstrapClass = 'OpenEMR\\Modules\\ClinicalCopilot\\Bootstrap';
@@ -54,8 +54,8 @@ class BootstrapRegistrationTest extends TestCase
         $bootstrap->subscribeToEvents();
 
         $this->assertNotEmpty(
-            $eventDispatcher->getListeners(PatientSummaryCardRenderEvent::EVENT_HANDLE),
-            'Bootstrap should register a listener for PatientSummaryCard RenderEvent::EVENT_HANDLE (copilot card injection)'
+            $eventDispatcher->getListeners(PatientDemographicsRenderEvent::EVENT_SECTION_LIST_RENDER_BEFORE),
+            'Bootstrap should register a listener for PatientDemographics RenderEvent::EVENT_SECTION_LIST_RENDER_BEFORE (copilot card injection)'
         );
         $this->assertNotEmpty(
             $eventDispatcher->getListeners(PageHeadingRenderEvent::EVENT_PAGE_HEADING_RENDER),

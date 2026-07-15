@@ -77,8 +77,7 @@ final class CopilotPanelController
         <button type="button"
                 id="copilot-open-chat-btn"
                 class="btn btn-sm btn-outline-primary copilot-open-chat-btn"
-                title="<?php echo xla('Open Clinical Co-Pilot'); ?>"
-                data-copilot-pid="<?php echo attr((string) $this->pid); ?>">
+                title="<?php echo xla('Open Clinical Co-Pilot'); ?>">
             <i class="fa fa-comment-medical"></i> <?php echo xlt('Co-Pilot'); ?>
         </button>
         <div id="copilot-chat-panel" class="copilot-chat-panel copilot-hidden" aria-hidden="true"></div>
