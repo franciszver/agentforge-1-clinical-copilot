@@ -88,14 +88,7 @@ VITALS_BUNDLE = {"resourceType": "Bundle", "type": "collection", "total": 15}
 LABS_BUNDLE_EMPTY = {"resourceType": "Bundle", "type": "collection", "total": 0}
 
 
-def _client(handler) -> OpenEmrClient:
-    return OpenEmrClient(
-        base_url="https://openemr",
-        client=httpx.Client(transport=httpx.MockTransport(handler)),
-    )
-
-
-def test_happy_path_maps_demographics_and_section_counts():
+def test_happy_path_maps_demographics_and_section_counts(make_openemr_client):
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         query = dict(request.url.params)
@@ -117,7 +110,7 @@ def test_happy_path_maps_demographics_and_section_counts():
             return httpx.Response(200, json=LABS_BUNDLE_EMPTY)
         raise AssertionError(f"unexpected request: {path} {query}")
 
-    result = get_patient_summary(_client(handler), token="tok", patient_id=1)
+    result = get_patient_summary(make_openemr_client(handler), token="tok", patient_id=1)
 
     assert result.patient_id == 1
     assert result.first_name == "Phil"
@@ -134,7 +127,7 @@ def test_happy_path_maps_demographics_and_section_counts():
     assert result.source_refs is None
 
 
-def test_empty_sections_yield_zero_counts_not_an_error():
+def test_empty_sections_yield_zero_counts_not_an_error(make_openemr_client):
     """Empty/404 sections are a valid state -- zero counts, no exception.
 
     Covers both OpenEMR empty-section shapes observed live: the
@@ -161,7 +154,7 @@ def test_empty_sections_yield_zero_counts_not_an_error():
             return httpx.Response(200, json=LABS_BUNDLE_EMPTY)
         raise AssertionError(f"unexpected request: {path} {query}")
 
-    result = get_patient_summary(_client(handler), token="tok", patient_id=1)
+    result = get_patient_summary(make_openemr_client(handler), token="tok", patient_id=1)
 
     assert result.medication_count == 0
     assert result.appointment_count == 0
@@ -172,26 +165,26 @@ def test_empty_sections_yield_zero_counts_not_an_error():
     assert result.recent_lab_count == 0
 
 
-def test_forbidden_on_patient_propagates_and_does_not_swallow():
+def test_forbidden_on_patient_propagates_and_does_not_swallow(make_openemr_client):
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/apis/default/api/patient":
             return httpx.Response(403, json={"error": "insufficient_scope"})
         raise AssertionError(f"unexpected request beyond the patient fetch: {request.url.path}")
 
     with pytest.raises(OpenEmrApiError) as excinfo:
-        get_patient_summary(_client(handler), token="tok", patient_id=1)
+        get_patient_summary(make_openemr_client(handler), token="tok", patient_id=1)
 
     assert excinfo.value.category == ErrorCategory.FORBIDDEN
 
 
-def test_patient_not_found_raises_not_found():
+def test_patient_not_found_raises_not_found(make_openemr_client):
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/apis/default/api/patient":
             return httpx.Response(200, json=PATIENT_LIST_BODY)
         raise AssertionError(f"unexpected request beyond the patient fetch: {request.url.path}")
 
     with pytest.raises(OpenEmrApiError) as excinfo:
-        get_patient_summary(_client(handler), token="tok", patient_id=999999)
+        get_patient_summary(make_openemr_client(handler), token="tok", patient_id=999999)
 
     assert excinfo.value.category == ErrorCategory.NOT_FOUND
 

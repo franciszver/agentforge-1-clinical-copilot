@@ -42,6 +42,7 @@ Phil Belford, pubpid 1):
 from __future__ import annotations
 
 import datetime
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from app.openemr_client import ErrorCategory, OpenEmrApiError, OpenEmrClient
@@ -55,20 +56,32 @@ def get_patient_summary(client: OpenEmrClient, token: str, patient_id: int) -> P
     demographics = _fetch_demographics(client, token, patient_id)
     patient_uuid = demographics["uuid"]
 
-    return PatientSummaryOutput(
-        patient_id=patient_id,
-        first_name=demographics["fname"],
-        last_name=demographics["lname"],
-        date_of_birth=datetime.date.fromisoformat(demographics["DOB"]),
-        sex=_SEX_MAP.get(str(demographics.get("sex", "")).lower(), Sex.UNKNOWN),
-        medication_count=_count_rest_list(client, token, f"patient/{patient_id}/medication"),
-        allergy_count=_count_rest_list(client, token, f"patient/{patient_uuid}/allergy"),
-        problem_count=_count_rest_list(client, token, f"patient/{patient_uuid}/medical_problem"),
-        recent_lab_count=_count_fhir_bundle(client, token, patient_uuid, "laboratory"),
-        vital_count=_count_fhir_bundle(client, token, patient_uuid, "vital-signs"),
-        encounter_count=_count_rest_list(client, token, f"patient/{patient_uuid}/encounter"),
-        appointment_count=_count_rest_list(client, token, f"patient/{patient_id}/appointment"),
-    )
+    # The 7 section counts are independent reads; fan them out concurrently
+    # (httpx.Client is thread-safe) instead of paying for 7 sequential round
+    # trips -- this tool sits on the pre-visit-brief request's latency path.
+    with ThreadPoolExecutor(max_workers=7) as pool:
+        medication = pool.submit(_count_rest_list, client, token, f"patient/{patient_id}/medication")
+        allergy = pool.submit(_count_rest_list, client, token, f"patient/{patient_uuid}/allergy")
+        problem = pool.submit(_count_rest_list, client, token, f"patient/{patient_uuid}/medical_problem")
+        recent_lab = pool.submit(_count_fhir_bundle, client, token, patient_uuid, "laboratory")
+        vital = pool.submit(_count_fhir_bundle, client, token, patient_uuid, "vital-signs")
+        encounter = pool.submit(_count_rest_list, client, token, f"patient/{patient_uuid}/encounter")
+        appointment = pool.submit(_count_rest_list, client, token, f"patient/{patient_id}/appointment")
+
+        return PatientSummaryOutput(
+            patient_id=patient_id,
+            first_name=demographics["fname"],
+            last_name=demographics["lname"],
+            date_of_birth=datetime.date.fromisoformat(demographics["DOB"]),
+            sex=_SEX_MAP.get(str(demographics.get("sex", "")).lower(), Sex.UNKNOWN),
+            medication_count=medication.result(),
+            allergy_count=allergy.result(),
+            problem_count=problem.result(),
+            recent_lab_count=recent_lab.result(),
+            vital_count=vital.result(),
+            encounter_count=encounter.result(),
+            appointment_count=appointment.result(),
+        )
 
 
 def _fetch_demographics(client: OpenEmrClient, token: str, patient_id: int) -> dict[str, Any]:
