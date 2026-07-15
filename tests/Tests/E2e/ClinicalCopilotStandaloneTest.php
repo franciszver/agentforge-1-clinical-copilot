@@ -141,7 +141,7 @@ class ClinicalCopilotStandaloneTest extends PantherTestCase
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<array-key, mixed>
      */
     private function fetchJson(string $path): array
     {
