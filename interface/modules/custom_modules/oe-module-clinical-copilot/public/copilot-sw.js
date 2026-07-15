@@ -35,8 +35,16 @@
 
     // Path substrings that must never be cached even if a future change to
     // the checks above would otherwise match them -- defense in depth for
-    // the routes that can carry PHI.
-    var NEVER_CACHE_SUBSTRINGS = ['ajax.php', 'chat-proxy.php', '/apis/'];
+    // the routes that can carry PHI. '.php' anywhere in the path denies
+    // every dynamic PHP endpoint (this module's only PHI-bearing routes),
+    // including PATH_INFO tricks that append a static-looking suffix such as
+    // `copilot.php/x.js` -- Apache executes copilot.php and returns the full
+    // session page (window.CopilotContext, CSRF token) on a URL that would
+    // otherwise pass the static-extension allowlist below. No static asset
+    // this worker legitimately caches contains '.php' in its path. '/apis/'
+    // (the OpenEMR REST/FHIR surface, no '.php' in its path) is denied
+    // separately.
+    var NEVER_CACHE_SUBSTRINGS = ['.php', '/apis/'];
 
     function isCacheable(request) {
         if (!request || typeof request.url !== 'string' || request.method !== 'GET') {

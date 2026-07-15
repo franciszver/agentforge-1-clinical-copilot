@@ -69,6 +69,15 @@ describe('isCacheable', () => {
         expect(isCacheable(req(p))).toBe(false);
     });
 
+    test.each([
+        ['copilot.php/report.js'],
+        ['copilot.php/x.png'],
+        ['ajax.php/context.js'],
+        ['chat-proxy.php/data.css']
+    ])('PATH_INFO trick %s (dynamic .php endpoint with a static-looking suffix) is never cacheable', (p) => {
+        expect(isCacheable(req(p))).toBe(false);
+    });
+
     test('a static-looking path is never cacheable if it carries a query string (may carry context)', () => {
         expect(isCacheable(req('assets/js/copilot-chat.js?pid=1'))).toBe(false);
         expect(isCacheable(req('manifest.json?v=2'))).toBe(false);
