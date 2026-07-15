@@ -89,10 +89,12 @@ final class CopilotPanelController
      * Render the module's CSS/JS asset tags and the current session
      * context (pid, encounter, authUserID) for the panel JS to read.
      *
-     * The context values are already parsed to int by the session
-     * accessors above, so they are safe primitives - json_encode() (the
-     * same mechanism js_escape() wraps) is used directly here because the
-     * composite array is not a string js_escape()'s signature accepts.
+     * The context values are ints parsed at the session boundary, and the
+     * JSON_HEX_* flags escape <, >, &, ', and " so no value can break out
+     * of the inline script context (e.g. via a literal close-script tag)
+     * even if a string field is ever added to the context. js_escape() is
+     * not used because it is a bare json_encode() without these flags and
+     * its declared signature accepts only strings.
      */
     public function renderAssetTags(): string
     {
@@ -101,7 +103,10 @@ final class CopilotPanelController
             'encounter' => $this->encounter,
             'authUserID' => $this->authUserId,
         ];
-        $contextJson = json_encode($context, JSON_THROW_ON_ERROR);
+        $contextJson = json_encode(
+            $context,
+            JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
+        );
         ob_start();
         ?>
         <link rel="stylesheet" href="<?php echo attr($this->moduleUrl . '/public/assets/css/copilot.css'); ?>">
