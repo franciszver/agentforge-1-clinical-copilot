@@ -31,9 +31,9 @@ hermetic mocks:
 
 Skipped by default (``pytest -m "not integration"``). Case (a) needs the live
 OpenEMR stack + the dev OAuth client creds file (produced by
-``scripts/verify-oauth-dev.sh``); case (b) needs ``OLLAMA_BASE_URL`` pointed at
-the proxied Ollama. Each case skips with a clear message when its live
-dependency is absent.
+``scripts/verify-oauth-dev.sh``) and skips with a clear message when either is
+absent; case (b) needs a reachable Ollama at ``OLLAMA_BASE_URL`` (it exercises
+the real model, so an unreachable Ollama surfaces as a hard error, not a skip).
 """
 
 from __future__ import annotations
@@ -111,13 +111,6 @@ def _password_grant_token(username: str, password: str) -> str:
     return token.access_token
 
 
-def _live_openemr_client() -> OpenEmrClient:
-    return OpenEmrClient(
-        base_url=_OPENEMR_BASE_URL,
-        client=httpx.Client(verify=False, timeout=20.0),
-    )
-
-
 # --------------------------------------------------------------------------- #
 # Case (a): a scoped user's real token cannot reach clinical PHI.
 # --------------------------------------------------------------------------- #
@@ -126,18 +119,21 @@ def test_scoped_user_token_cannot_reach_clinical_phi_and_leaks_none() -> None:
     for; the live stack denies clinical data, and the tool layer surfaces that
     denial with ZERO PHI."""
     token = _password_grant_token(_SCOPED_USER, _SCOPED_PASS)
-    client = _live_openemr_client()
 
-    # The token is genuinely valid and IN SCOPE for demographics -- proving the
-    # clinical denial below is a category-scoped authorization decision, not a
-    # broken/expired token. (resolve_patient_uuid reads the demographics roster.)
-    patient_uuid = resolve_patient_uuid(client, token, _DEMO_PATIENT_ID)
-    assert patient_uuid, "scoped token should still reach in-scope demographics"
+    # verify=False: the dev stack uses a self-signed certificate (see app.config).
+    with httpx.Client(verify=False, timeout=20.0) as http_client:
+        client = OpenEmrClient(base_url=_OPENEMR_BASE_URL, client=http_client)
 
-    # ... but the same token is DENIED clinical PHI by the live OpenEMR. This is
-    # the real per-request authorization refusal the tool layer must surface.
-    with pytest.raises(OpenEmrApiError) as excinfo:
-        get_medications(client, token, _DEMO_PATIENT_ID)
+        # The token is genuinely valid and IN SCOPE for demographics -- proving the
+        # clinical denial below is a category-scoped authorization decision, not a
+        # broken/expired token. (resolve_patient_uuid reads the demographics roster.)
+        patient_uuid = resolve_patient_uuid(client, token, _DEMO_PATIENT_ID)
+        assert patient_uuid, "scoped token should still reach in-scope demographics"
+
+        # ... but the same token is DENIED clinical PHI by the live OpenEMR. This is
+        # the real per-request authorization refusal the tool layer must surface.
+        with pytest.raises(OpenEmrApiError) as excinfo:
+            get_medications(client, token, _DEMO_PATIENT_ID)
 
     error = excinfo.value
 
@@ -236,7 +232,12 @@ def test_physician_cross_patient_ask_is_refused_and_audited() -> None:
         assert _OTHER_PHI_MARKER not in _blob_of(call.result), "cross-patient PHI leaked into a tool trace"
     assert _OTHER_PHI_MARKER not in result.answer, "cross-patient PHI leaked into the final answer"
 
-    # --- P2.17 audit trail: the attempt is recorded (who / which chart / what). ---
+    # --- P2.17 audit record: built exactly as _stream_chat builds it -- from the
+    # real token-derived identity and the BOUND chart (never the model-asked id) --
+    # so it captures who / which chart / what with the cross-patient attempt
+    # visible and no B PHI. This asserts the emitted record's shape; the
+    # append-to-store wiring is proven hermetically in
+    # services/copilot-agent/tests/test_chat_endpoint.py. ---
     audit = Turn(
         correlation_id=str(uuid.uuid4()),
         user=_user_identity_from_token(physician_token),
