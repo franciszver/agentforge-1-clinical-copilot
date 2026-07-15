@@ -15,42 +15,63 @@ declare(strict_types=1);
 namespace OpenEMR\Tests\Isolated\Modules\ClinicalCopilot;
 
 use OpenEMR\Core\ModulesClassLoader;
-use OpenEMR\Modules\ClinicalCopilot\Bootstrap;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\EventDispatcher\EventDispatcher;
 
 class BootstrapRegistrationTest extends TestCase
 {
-    #[Test]
-    public function testBootstrapClassExists(): void
+    private string $projectDir;
+    private string $moduleBootstrapPath;
+
+    protected function setUp(): void
     {
-        $this->assertTrue(class_exists(Bootstrap::class), 'Bootstrap class should exist');
+        $this->projectDir = dirname(__DIR__, 5);
+        $this->moduleBootstrapPath = $this->projectDir . DIRECTORY_SEPARATOR . 'interface' . DIRECTORY_SEPARATOR . 'modules' . DIRECTORY_SEPARATOR . 'custom_modules' . DIRECTORY_SEPARATOR . 'oe-module-clinical-copilot' . DIRECTORY_SEPARATOR . 'src';
     }
 
     #[Test]
-    public function testBootstrapRegistersNamespace(): void
+    public function testBootstrapClassExists(): void
     {
-        $projectDir = dirname(__DIR__, 5);
-        $classLoader = new ModulesClassLoader($projectDir);
-
-        // Register the namespace
+        $classLoader = new ModulesClassLoader($this->projectDir);
         $classLoader->registerNamespaceIfNotExists(
             'OpenEMR\\Modules\\ClinicalCopilot\\',
-            $projectDir . DIRECTORY_SEPARATOR . 'interface' . DIRECTORY_SEPARATOR . 'modules' . DIRECTORY_SEPARATOR . 'custom_modules' . DIRECTORY_SEPARATOR . 'oe-module-clinical-copilot' . DIRECTORY_SEPARATOR . 'src'
+            $this->moduleBootstrapPath
         );
 
-        // Verify the class can be loaded
-        $this->assertTrue(class_exists(Bootstrap::class), 'Bootstrap class should be loadable after namespace registration');
+        $this->assertTrue(class_exists('OpenEMR\\Modules\\ClinicalCopilot\\Bootstrap'), 'Bootstrap class should exist after namespace registration');
+    }
+
+    #[Test]
+    public function testBootstrapRegistersNamespaceViaModulesClassLoader(): void
+    {
+        $classLoader = new ModulesClassLoader($this->projectDir);
+
+        // Register the namespace - should not throw
+        $result = $classLoader->registerNamespaceIfNotExists(
+            'OpenEMR\\Modules\\ClinicalCopilot\\',
+            $this->moduleBootstrapPath
+        );
+
+        // Verify the class can be loaded after registration
+        $this->assertTrue(class_exists('OpenEMR\\Modules\\ClinicalCopilot\\Bootstrap'), 'Bootstrap class should be loadable after namespace registration');
     }
 
     #[Test]
     public function testBootstrapSubscribesToEvents(): void
     {
+        $classLoader = new ModulesClassLoader($this->projectDir);
+        $classLoader->registerNamespaceIfNotExists(
+            'OpenEMR\\Modules\\ClinicalCopilot\\',
+            $this->moduleBootstrapPath
+        );
+
         $eventDispatcher = new EventDispatcher();
-        $bootstrap = new Bootstrap($eventDispatcher);
+        $bootstrapClass = 'OpenEMR\\Modules\\ClinicalCopilot\\Bootstrap';
+        $bootstrap = new $bootstrapClass($eventDispatcher);
 
         // Call subscribeToEvents - should not throw
-        $this->assertNull($bootstrap->subscribeToEvents(), 'subscribeToEvents should complete without error');
+        $result = $bootstrap->subscribeToEvents();
+        $this->assertNull($result, 'subscribeToEvents should complete without error and return null');
     }
 }
