@@ -24,7 +24,6 @@ declare(strict_types=1);
 
 namespace OpenEMR\Tests\E2e;
 
-use Facebook\WebDriver\WebDriver;
 use Facebook\WebDriver\WebDriverBy;
 use Facebook\WebDriver\WebDriverElement;
 use Facebook\WebDriver\WebDriverExpectedCondition;
@@ -47,7 +46,7 @@ class OfModuleManagerEnableClinicalCopilotTest extends PantherTestCase
     // "./Installer/manage") that resolve against the current path, so a
     // literal "/index" segment would double up to
     // ".../Installer/Installer/manage" and 404.
-    private const MODULE_MANAGER_URL = '/interface/modules/zend_modules/public/Installer?testing_mode=1';
+    private const MODULE_MANAGER_URL = '/interface/modules/zend_modules/public/Installer';
 
     #[Test]
     public function testModuleEnablesViaModuleManagerWithoutError(): void
@@ -117,9 +116,7 @@ class OfModuleManagerEnableClinicalCopilotTest extends PantherTestCase
     private function goToModuleManager(): void
     {
         $this->client->request('GET', self::MODULE_MANAGER_URL);
-        $this->client->wait(10)->until(
-            static fn(WebDriver $driver) => str_contains($driver->getPageSource(), 'Custom Module Listings')
-        );
+        $this->client->waitFor("//span[contains(text(), 'Custom Module Listings')]", 10);
     }
 
     /**
@@ -135,7 +132,10 @@ class OfModuleManagerEnableClinicalCopilotTest extends PantherTestCase
 
     private function toDbInt(mixed $value): int
     {
-        return is_numeric($value) ? (int) $value : 0;
+        if (!is_numeric($value)) {
+            $this->fail('Expected a numeric module column value, got ' . get_debug_type($value));
+        }
+        return (int) $value;
     }
 
     private function getModuleUiRowText(): string

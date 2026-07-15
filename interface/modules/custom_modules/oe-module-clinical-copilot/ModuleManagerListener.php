@@ -24,11 +24,6 @@ use OpenEMR\Core\AbstractModuleActionListener;
 
 class ModuleManagerListener extends AbstractModuleActionListener
 {
-    public function __construct()
-    {
-        parent::__construct();
-    }
-
     /**
      * @param        $methodName
      * @param        $modId

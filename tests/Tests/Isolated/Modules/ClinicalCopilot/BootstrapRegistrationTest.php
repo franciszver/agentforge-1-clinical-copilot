@@ -27,7 +27,7 @@ class BootstrapRegistrationTest extends TestCase
     protected function setUp(): void
     {
         $this->projectDir = dirname(__DIR__, 5);
-        $this->moduleBootstrapPath = $this->projectDir . DIRECTORY_SEPARATOR . 'interface' . DIRECTORY_SEPARATOR . 'modules' . DIRECTORY_SEPARATOR . 'custom_modules' . DIRECTORY_SEPARATOR . 'oe-module-clinical-copilot' . DIRECTORY_SEPARATOR . 'src';
+        $this->moduleBootstrapPath = $this->projectDir . '/interface/modules/custom_modules/oe-module-clinical-copilot/src';
 
         $classLoader = new ModulesClassLoader($this->projectDir);
         $classLoader->registerNamespaceIfNotExists(

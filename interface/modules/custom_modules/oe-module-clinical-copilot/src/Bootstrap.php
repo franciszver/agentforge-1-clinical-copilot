@@ -23,9 +23,11 @@ class Bootstrap
 
     public function __construct(
         /**
-         * @var EventDispatcherInterface The object responsible for sending and subscribing to events
+         * @var EventDispatcherInterface The object responsible for sending and subscribing to events.
+         * Public so the scaffold carries the wiring for the first real event
+         * subscription (P2.12) without a write-only private property.
          */
-        private readonly EventDispatcherInterface $eventDispatcher
+        public readonly EventDispatcherInterface $eventDispatcher
     ) {
     }
 
