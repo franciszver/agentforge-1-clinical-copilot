@@ -35,7 +35,6 @@ const src = fs.readFileSync(
     ),
     'utf8'
 );
-// eslint-disable-next-line no-new-func
 new Function('window', 'document', src)(global.window, global.document);
 
 const {
