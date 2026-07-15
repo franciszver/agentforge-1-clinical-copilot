@@ -9,6 +9,7 @@ dev-stack Ollama.
 from __future__ import annotations
 
 import json
+import os
 
 import httpx
 import pytest
@@ -76,6 +77,41 @@ def test_chat_sends_think_false_stream_true_temperature_zero_and_model():
     assert body["stream"] is True
     assert body["model"] == "qwen3:4b"
     assert body["options"]["temperature"] == 0
+
+
+def test_chat_strips_leaked_thinking_preamble_from_content():
+    """Defense against an observed Ollama/qwen3 quirk: even with ``think:
+    false``, some Ollama versions still emit the model's reasoning inline in
+    ``message.content`` (terminated by a stray ``</think>`` marker) instead
+    of suppressing it. The client must return only the real answer.
+    """
+    body = _ndjson(
+        {"message": {"role": "assistant", "content": "some leaked reasoning"}, "done": False},
+        {"message": {"role": "assistant", "content": "</think>"}, "done": False},
+        {"message": {"role": "assistant", "content": "\n\nhello"}, "done": True},
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body)
+
+    client = _client(handler)
+    result = client.chat([{"role": "user", "content": "hi"}])
+
+    assert result == "hello"
+
+
+def test_chat_strips_properly_paired_think_tags_too():
+    body = _ndjson(
+        {"message": {"role": "assistant", "content": "<think>reasoning</think>\n\nhello"}, "done": True},
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body)
+
+    client = _client(handler)
+    result = client.chat([{"role": "user", "content": "hi"}])
+
+    assert result == "hello"
 
 
 # --- extract: happy path ------------------------------------------------
@@ -215,3 +251,40 @@ def test_from_settings_builds_client_targeting_configured_base_url_and_model():
     client = OllamaClient.from_settings(settings)
 
     assert client._base_url == "http://ollama.example:11434"
+
+
+# --- live integration: real qwen3:4b -----------------------------------
+#
+# Ollama is internal-only on the dev stack's docker network (no host port
+# published). These tests require a bridge -- e.g. a disposable socat proxy
+# container publishing the internal ollama service to the host -- pointed to
+# via OLLAMA_BASE_URL. Skipped by default (``pytest -m "not integration"``).
+
+
+@pytest.mark.integration
+def test_live_chat_against_real_qwen3_returns_non_thinking_text():
+    """think:false must suppress qwen3:4b's default <think>...</think> preamble."""
+    base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    settings = Settings(ollama_base_url=base_url, ollama_api_timeout_seconds=120.0)
+    client = OllamaClient.from_settings(settings)
+
+    result = client.chat([{"role": "user", "content": "Reply with exactly the word: hello"}])
+
+    assert result.strip() != ""
+    assert "<think>" not in result
+    assert "</think>" not in result
+
+
+@pytest.mark.integration
+def test_live_extract_against_real_qwen3_returns_valid_schema():
+    base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    settings = Settings(ollama_base_url=base_url, ollama_api_timeout_seconds=120.0)
+    client = OllamaClient.from_settings(settings)
+
+    result = client.extract(
+        "Describe a common four-legged pet as JSON with its name and number of legs.",
+        _Animal,
+    )
+
+    assert isinstance(result, _Animal)
+    assert result.legs > 0
