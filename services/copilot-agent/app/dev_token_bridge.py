@@ -148,7 +148,21 @@ class DevTokenBridge:
         ``DevTokenError`` (log-safe) if credentials are missing or the upstream
         token request fails.
         """
-        raise NotImplementedError
+        with self._lock:
+            now = self._clock()
+            cached = self._cached
+            if cached is not None and now < cached.expires_at:
+                return cached.access_token
+
+            token = self._fetch()
+            ttl = (
+                token.expires_in
+                if isinstance(token.expires_in, int) and token.expires_in > 0
+                else _DEFAULT_TOKEN_TTL_SECONDS
+            )
+            expires_at = now + max(ttl - _EXPIRY_SAFETY_MARGIN_SECONDS, 0)
+            self._cached = _CachedToken(access_token=token.access_token, expires_at=expires_at)
+            return token.access_token
 
     def invalidate(self) -> None:
         """Drop the cached token so the next :meth:`get_token` re-fetches.
@@ -157,13 +171,45 @@ class DevTokenBridge:
         force a refresh (e.g. after an out-of-band key rotation) rather than
         wait out the TTL.
         """
-        raise NotImplementedError
+        with self._lock:
+            self._cached = None
 
     def _fetch(self) -> TokenResponse:
-        raise NotImplementedError
+        client_id, client_secret = self._load_creds()
+        try:
+            with self._client_factory() as client:
+                return fetch_token_password_grant(
+                    client,
+                    base_url=self._base_url,
+                    token_path=self._token_path,
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    username=self._username,
+                    password=self._password,
+                    scope=self._scope,
+                )
+        except OpenEmrAuthError as exc:
+            # OpenEmrAuthError is already log-safe (no secret/password/body);
+            # wrap it in the bridge's error type without embedding its message.
+            raise DevTokenError("dev token acquisition failed") from exc
 
     def _load_creds(self) -> tuple[str, str]:
-        raise NotImplementedError
+        try:
+            raw = Path(self._creds_path).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise DevTokenError(
+                "dev client credentials not found; run scripts/bootstrap-copilot-dev-client.sh"
+            ) from exc
+        try:
+            data = json.loads(raw)
+        except ValueError as exc:
+            raise DevTokenError("dev client credentials file is not valid JSON") from exc
+
+        client_id = data.get("client_id") if isinstance(data, dict) else None
+        client_secret = data.get("client_secret") if isinstance(data, dict) else None
+        if not isinstance(client_id, str) or not client_id or not isinstance(client_secret, str) or not client_secret:
+            raise DevTokenError("dev client credentials file missing client_id/client_secret")
+        return client_id, client_secret
 
 
 def _register_cli() -> int:

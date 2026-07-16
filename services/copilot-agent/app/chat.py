@@ -41,6 +41,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.config import get_settings
+from app.dev_token_bridge import DevTokenBridge
 from app.ollama_client import OllamaClient
 from app.openemr_client import OpenEmrClient
 from app.planner import Planner, PlannerResult
@@ -120,18 +121,45 @@ def _bearer_token_or_empty(authorization: str | None) -> str:
     return ""
 
 
-def _default_planner_factory(token: str) -> PlannerFactory:
-    """Build the production planner factory for one request's bearer token.
+class DevTokenBridgeProtocol(Protocol):
+    """What the planner factory needs from the token bridge: a real token."""
 
-    Wires real ``OllamaClient``/``OpenEmrClient`` instances from ``Settings``
-    (P0.5/P2.2's ``from_settings`` constructors) and passes the request's
-    bearer token straight through to ``Planner`` -- the same token flows
-    browser -> agent -> OpenEMR API tool calls, per the trust-boundary design
-    (plan §5). The token's real-OAuth-token replacement for the current
-    dev-only identity assertion is a documented, separate carry-forward
-    (see ``TokenBrokerController``); tool calls against OpenEMR made with an
-    invalid token fail per-call (caught as ``OpenEmrApiError`` in the planner
-    loop) without crashing the conversation.
+    def get_token(self) -> str: ...
+
+
+_dev_token_bridge: DevTokenBridge | None = None
+
+
+def get_dev_token_bridge() -> DevTokenBridge:
+    """FastAPI dependency: the process-wide ``DevTokenBridge``. Override in tests.
+
+    Built lazily and reused so the real OpenEMR token is cached across
+    requests (the bridge holds the in-memory TTL cache).
+    """
+    global _dev_token_bridge
+    if _dev_token_bridge is None:
+        _dev_token_bridge = DevTokenBridge.from_settings(get_settings())
+    return _dev_token_bridge
+
+
+def _default_planner_factory(
+    browser_token: str,
+    dev_token_bridge: DevTokenBridgeProtocol,
+) -> PlannerFactory:
+    """Build the production planner factory for one request.
+
+    The Planner's OpenEMR tool calls use a REAL OpenEMR token obtained
+    server-side by ``dev_token_bridge`` -- NOT the browser's ``DevAgentToken``
+    (``browser_token``), which is only an HMAC identity assertion (finding F4 /
+    issue #126). The real token never reaches the browser. The browser token
+    still gates the request (the token-validator seam) and carries the pid for
+    patient-context binding upstream in ``chat_endpoint``; it is intentionally
+    not threaded into tool calls here.
+
+    Identity for ACL is the bridge's configured demo clinician until #124
+    (production ``authorization_code``, per-user tokens) lands. A tool call
+    made with an expired/rejected token still fails per-call (caught as
+    ``OpenEmrApiError`` in the planner loop) without crashing the conversation.
     """
     settings = get_settings()
 
@@ -139,16 +167,19 @@ def _default_planner_factory(token: str) -> PlannerFactory:
         return Planner(
             ollama_client=OllamaClient.from_settings(settings),
             openemr_client=OpenEmrClient.from_settings(settings),
-            token=token,
+            token=dev_token_bridge.get_token(),
             patient_id=patient_id,
         )
 
     return factory
 
 
-def get_planner_factory(authorization: str | None = Header(default=None)) -> PlannerFactory:
+def get_planner_factory(
+    authorization: str | None = Header(default=None),
+    dev_token_bridge: DevTokenBridge = Depends(get_dev_token_bridge),
+) -> PlannerFactory:
     """FastAPI dependency: builds a ``PlannerProtocol`` for a patient_id. Override in tests."""
-    return _default_planner_factory(_bearer_token_or_empty(authorization))
+    return _default_planner_factory(_bearer_token_or_empty(authorization), dev_token_bridge)
 
 
 UNKNOWN_USER = "unknown"
