@@ -388,19 +388,26 @@ def apply_recency_notice(result: PlannerResult, *, now: datetime) -> PlannerResu
     result (e.g. ``stale-only-vitals.yaml``'s recorded answer already names
     "February 1, 2014" from that channel, unprompted).
 
-    NOT wired into ``app.chat``'s live SSE stream (only into the eval
-    pipeline, ``runner.pipeline.run_case``) as of #153 -- a known follow-up,
-    not an oversight: doing so safely needs its own design pass, since real
-    OpenEMR/FHIR record dates may arrive timezone-AWARE (offset-qualified)
-    while this module's ``now`` is caller-supplied and today only exercised
-    naive (see the eval's fixed ``now`` and this module's own tests) --
-    mixing the two raises ``TypeError`` at runtime, not a 2-line fix.
-    A structured alternative -- folding recency into ``VerdictResult``
-    alongside the allergy/interaction checks (also deterministic, also
-    ``raw_results``-only) rather than splicing text onto ``result.answer``
-    -- was considered and deliberately deferred too, to keep this change
-    scoped to what the offline eval needs; that would also make the SSE
-    wiring above nearly free once done."""
+    Wired into BOTH the live ``app.chat._stream_chat`` SSE path (production
+    passes ``now = datetime.now(timezone.utc)`` via the ``get_clock`` seam,
+    applied right after ``planner.run`` and before the answer frame is
+    emitted) and the offline eval harness (``runner.pipeline.run_case``, with
+    a fixed ``now`` for deterministic replay) -- so a green eval reflects real
+    user-facing behavior, the only legitimate difference being the injected
+    clock. The tz-aware vs naive comparison hazard (real OpenEMR/FHIR record
+    dates may be offset-qualified while ``now`` may be naive or aware) is
+    handled in ``app.verification.stale_record_date`` via ``_as_aware_utc``,
+    so this is safe against a live stream regardless of the record date's
+    tzinfo.
+
+    FOLLOW-UP (deliberately deferred, not this PR): the notice is spliced onto
+    ``result.answer`` as text rather than carried as a structured
+    ``app.rendering.RenderedAnswer`` segment / ``VerdictResult`` warning
+    alongside the allergy/interaction checks. Text-append is chosen here
+    because that is what the eval's ``answer_contains`` assertion inspects and
+    what the SSE ``answer`` frame carries today; a structured representation
+    is the cleaner future form and would let the P3.8 UI render recency as its
+    own badge rather than inline prose."""
     tools = [entry.tool for entry in result.trace]
     notices = recency_notices(tools, result.raw_results, now)
     if not notices:
