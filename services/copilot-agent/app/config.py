@@ -76,6 +76,32 @@ class Settings(BaseSettings):
         "user/procedure.read user/Observation.read"
     )
 
+    # Production authorization_code client (#124 Phase 1). Distinct from the dev
+    # token bridge above: this client is driven by the browser via the OAuth2
+    # authorization_code grant, and an OpenEMR admin (not a dev SQL shortcut)
+    # enables it. See app/prod_client_registration.py and the README.
+    #
+    # CANONICAL redirect_uri -- the single source of truth Phase 2's authorize/
+    # callback must match byte-for-byte (OpenEMR requires exact redirect_uri
+    # matching). It is the BROWSER-facing host (localhost:9300) and the module's
+    # one-file-per-route OAuth callback endpoint, NOT the internal ``openemr``
+    # docker alias used for the server-side registration/token calls.
+    copilot_prod_client_redirect_uri: str = (
+        "https://localhost:9300/interface/modules/custom_modules/"
+        "oe-module-clinical-copilot/public/oauth-callback.php"
+    )
+    # SMART-on-FHIR scopes for the production client, reconciled against
+    # OpenEMR's ServerScopeListEntity::getAllSupportedScopesList() (OpenEMR
+    # silently strips unrecognized scopes). ``user/*.read`` is DROPPED -- OpenEMR
+    # has no wildcard scope; explicit per-resource read scopes are requested at
+    # authorize time in Phase 2 (mirroring copilot_dev_token_scopes above).
+    copilot_prod_client_scopes: str = (
+        "openid offline_access launch launch/patient api:oemr api:fhir fhirUser"
+    )
+    # Path (inside the agent container) for the production client credentials
+    # written by the prod registration CLI. Distinct file from the dev bridge's.
+    copilot_prod_client_creds_path: str = "/data/openemr-prod-client.json"
+
 
 def get_settings() -> Settings:
     """FastAPI dependency returning the current application settings."""
