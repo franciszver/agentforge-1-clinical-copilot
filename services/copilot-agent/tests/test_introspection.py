@@ -242,6 +242,28 @@ def test_introspector_ttl_cap_expires_cache(tmp_path):
     assert len(calls) == 2
 
 
+def test_introspector_cache_deadline_capped_at_exp_when_sooner_than_ttl(tmp_path):
+    # exp (1030) is SOONER than now + ttl (1000 + 60 = 1060): the cached entry's
+    # deadline must be capped at exp, not ttl. Advancing past exp but within the
+    # ttl window forces a re-introspection -- proving the cap is exp, not ttl.
+    calls: list[int] = []
+    now = {"t": 1000.0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"active": True, "exp": 1030})
+
+    introspector = _introspector(tmp_path, handler, calls=calls, clock=lambda: now["t"])
+
+    introspector.introspect(_TOK)
+    assert len(calls) == 1
+    now["t"] = 1025.0  # still before exp -> served from cache
+    introspector.introspect(_TOK)
+    assert len(calls) == 1
+    now["t"] = 1031.0  # past exp (1030) but well within ttl (1060)
+    introspector.introspect(_TOK)
+    assert len(calls) == 2  # deadline was capped at exp -> re-introspected
+
+
 def test_introspector_missing_creds_returns_invalid_without_logging_token(tmp_path, caplog):
     calls: list[int] = []
 

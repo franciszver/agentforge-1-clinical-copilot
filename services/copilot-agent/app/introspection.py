@@ -104,24 +104,35 @@ class TokenIntrospector:
     def introspect(self, token: str) -> IntrospectionResult:
         """Return the introspection result for ``token``, cached by token-hash.
 
-        A still-fresh positive result is returned from the cache; otherwise the
-        token is introspected upstream and, only if active, cached (deadline =
-        ``min(now + ttl, exp)``). Fail-closed on any error.
+        Double-checked locking so the (network) introspection round-trip runs
+        OUTSIDE the lock: a single cache-miss must not serialize every other
+        concurrent ``/chat`` introspection process-wide. The lock is held only
+        for the two cache touches -- the fast check and the store.
+
+        (1) lock -> return a still-fresh positive result on a cache hit;
+        (2) unlocked -> introspect upstream (two concurrent misses redundantly
+            introspecting is fine -- it is idempotent);
+        (3) lock -> store, but only for a positive result, with
+            ``deadline = min(now + ttl, exp)`` so the cap never outlives the
+            token. Fail-closed on any error; inactive results are never cached.
         """
         key = hashlib.sha256(token.encode()).hexdigest()
+
         with self._lock:
-            now = self._clock()
             cached = self._cache.get(key)
-            if cached is not None and now < cached.expires_at:
+            if cached is not None and self._clock() < cached.expires_at:
                 return cached.result
 
-            result = self._introspect_upstream(token)
-            if result.active:
-                deadline = now + self._cache_ttl_seconds
-                if result.exp is not None:
-                    deadline = min(deadline, float(result.exp))
-                self._cache[key] = _CachedIntrospection(result=result, expires_at=deadline)
+        result = self._introspect_upstream(token)
+        if not result.active:
             return result
+
+        with self._lock:
+            deadline = self._clock() + self._cache_ttl_seconds
+            if result.exp is not None:
+                deadline = min(deadline, float(result.exp))
+            self._cache[key] = _CachedIntrospection(result=result, expires_at=deadline)
+        return result
 
     def _introspect_upstream(self, token: str) -> IntrospectionResult:
         creds = self._load_creds()
