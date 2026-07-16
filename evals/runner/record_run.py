@@ -28,6 +28,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from pydantic import ValidationError
+
 _EVALS_ROOT = Path(__file__).resolve().parents[1]
 _REPO_ROOT = _EVALS_ROOT.parent
 _AGENT_ROOT = _REPO_ROOT / "services" / "copilot-agent"
@@ -53,17 +55,24 @@ _CASES_DIR = _EVALS_ROOT / "cases"
 _REGRESSIONS_DIR = _EVALS_ROOT / "regressions"
 _RECORDINGS_DIR = _EVALS_ROOT / "recordings"
 
-_REPLAY_ERRORS = (RecordingNotFoundError, RecordingExhaustedError, RecordingMismatchError)
+_REPLAY_ERRORS = (
+    RecordingNotFoundError,
+    RecordingExhaustedError,
+    RecordingMismatchError,
+    ValidationError,
+)
 
 
 def _case_outcome(case_file: Path, recordings_dir: Path) -> str:
     """``"passed"`` | ``"failed"`` | ``"xfailed"`` for one case.
 
     A case with no committed recording, or a recording that has diverged
-    from the case (see ``runner.ollama_replay``), is treated as a failing
-    replay rather than raising -- one broken case shouldn't stop the whole
-    run from being recorded, and it is honestly counted as a failure either
-    way. A case marked ``xfail`` (P4.8) whose assertions genuinely fail is
+    from the case -- a wrong call kind/order (see ``runner.ollama_replay``)
+    OR a recorded payload that no longer validates against its extraction
+    schema (``pydantic.ValidationError`` from ``schema.model_validate``) --
+    is treated as a failing replay rather than raising -- one broken case
+    shouldn't stop the whole run from being recorded, and it is honestly
+    counted as a failure either way. A case marked ``xfail`` (P4.8) whose assertions genuinely fail is
     ``xfailed`` (a documented known-failure); one whose assertions
     unexpectedly PASS is a stale xfail and reported as ``failed`` --
     mirroring ``pytest.mark.xfail(strict=True)``'s semantics so a fixed

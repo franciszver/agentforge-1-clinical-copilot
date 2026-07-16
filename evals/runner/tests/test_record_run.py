@@ -13,6 +13,7 @@ accounting itself.
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -43,6 +44,46 @@ def test_case_outcome_genuinely_failing_xfail_reports_xfailed() -> None:
 
 def test_case_outcome_missing_recording_reports_failed() -> None:
     assert _case_outcome(_CASES / "missing-recording.yaml", _RECORDINGS) == "failed"
+
+
+def test_case_outcome_schema_drifted_recording_reports_failed_not_raises(tmp_path: Path) -> None:
+    # A recorded extract payload that passes the call kind/schema-name check
+    # but no longer validates against its extraction schema (a drifted
+    # recording) is a "recording diverged from the case" -- it must be
+    # counted as a failing replay, NOT propagate a pydantic.ValidationError
+    # that aborts the whole recording run. Mirrors the RecordingMismatchError
+    # handling and pytest's per-case isolation.
+    cases_dir = tmp_path / "cases"
+    recordings_dir = tmp_path / "recordings"
+    cases_dir.mkdir()
+    recordings_dir.mkdir()
+
+    (cases_dir / "drift.yaml").write_text(
+        "id: drift\n"
+        "category: tool_selection\n"
+        'question: "What meds is she on?"\n'
+        "patient_id: 1\n"
+        "tool_data:\n"
+        "  get_medications:\n"
+        "    items:\n"
+        "      - name: Lisinopril\n"
+        "        dose: 10mg\n"
+        "        route: oral\n"
+        "        status: active\n"
+        "assertions:\n"
+        "  - type: first_tool_in\n"
+        "    tools: [get_medications]\n",
+        encoding="utf-8",
+    )
+    # Corrupt the first (PlannerDecision) extract payload so model_validate
+    # raises ValidationError -- kind/schema-name still match, only the shape
+    # is wrong, so this reaches schema.model_validate rather than tripping the
+    # earlier RecordingMismatch guard.
+    drifted = copy.deepcopy(_PASS_RECORDING)
+    drifted["calls"][0]["response"] = {"bogus": "no longer a valid PlannerDecision"}
+    (recordings_dir / "drift.json").write_text(json.dumps(drifted), encoding="utf-8")
+
+    assert _case_outcome(cases_dir / "drift.yaml", recordings_dir) == "failed"
 
 
 def test_case_outcome_stale_xfail_that_now_passes_reports_failed() -> None:
