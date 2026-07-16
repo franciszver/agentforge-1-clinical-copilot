@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     openemr_base_url: str = "https://openemr"
     ollama_base_url: str = "http://ollama:11434"
     trace_db_path: str = "/data/traces.db"
+    # HMAC key for TraceStore.hash_args (P4.2) -- keeps tool-call args
+    # non-reversible even though they are often low-entropy (patient ids,
+    # closed-set filter keys, date ranges); an unkeyed hash would let an
+    # attacker with read access to traces.db precompute the hash over the
+    # candidate space and recover the original args. DEV-ONLY default;
+    # override via env in any non-dev deployment.
+    trace_args_hash_secret: str = "dev-only-trace-hash-secret-change-me"
     openemr_verify_ssl: bool = False
     # Per-request timeout for calls made by ``OpenEmrClient`` (app/openemr_client.py).
     openemr_api_timeout_seconds: float = 10.0

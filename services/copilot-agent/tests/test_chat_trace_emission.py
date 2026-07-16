@@ -19,7 +19,7 @@ from app.chat import get_claim_extractor, get_planner_factory, get_token_validat
 from app.main import app
 from app.planner import PlannerResult, ToolCallTrace
 from app.schemas.planner import ToolName
-from app.trace_store import SpanType, TraceStore
+from app.trace_store import SpanStatus, SpanType, TraceStore
 from tests.test_chat_endpoint import FakeExtractor, FakePlanner
 
 
@@ -40,7 +40,7 @@ client = TestClient(app)
 
 
 def test_chat_invocation_writes_request_and_verification_spans(tmp_path: Path) -> None:
-    trace_store = TraceStore(db_path=str(tmp_path / "traces.db"))
+    trace_store = TraceStore(db_path=str(tmp_path / "traces.db"), hash_secret="test-secret")
     trace = [ToolCallTrace(tool=ToolName.GET_MEDICATIONS, args={}, result={"count": 1}, error=None)]
     fake_planner = FakePlanner(trace=trace, answer="She is on lisinopril.")
 
@@ -69,3 +69,35 @@ def test_chat_invocation_writes_request_and_verification_spans(tmp_path: Path) -
 
     verification_span = next(span for span in spans if span.span_type == SpanType.VERIFICATION)
     assert verification_span.verdict is not None
+
+
+class _FailingPlanner:
+    """A planner double that always raises -- drives the ``_stream_chat``
+    error path (request span recorded ``ok=False``, exception re-raised)."""
+
+    def run(self, question: str) -> PlannerResult:
+        raise RuntimeError("boom")
+
+
+def test_stream_chat_records_failed_request_span_on_exception(tmp_path: Path) -> None:
+    trace_store = TraceStore(db_path=str(tmp_path / "traces.db"), hash_secret="test-secret")
+
+    _override_ok_validator()
+    app.dependency_overrides[get_planner_factory] = lambda: (lambda patient_id: _FailingPlanner())
+    app.dependency_overrides[get_claim_extractor] = lambda: FakeExtractor()
+    app.dependency_overrides[get_trace_store] = lambda: trace_store
+
+    # Supply our own correlation id (the middleware honors an inbound
+    # X-Correlation-ID header) so we can look up the span even though the
+    # response never completes normally.
+    correlation_id = "test-failure-correlation-id"
+    with pytest.raises(RuntimeError, match="boom"):
+        client.post(
+            "/chat",
+            json={"message": "hello", "patient_id": 1},
+            headers={"Authorization": "Bearer good-token", "X-Correlation-ID": correlation_id},
+        )
+
+    spans = trace_store.get_spans(correlation_id)
+    request_span = next(span for span in spans if span.span_type == SpanType.REQUEST)
+    assert request_span.status == SpanStatus.FAIL

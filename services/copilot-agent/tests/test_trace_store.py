@@ -18,6 +18,8 @@ import pytest
 
 from app.trace_store import FeedbackThumb, SpanStatus, SpanType, TraceStore, hash_args
 
+_TEST_HASH_SECRET = "test-secret"
+
 
 @pytest.fixture
 def db_path(tmp_path: Path) -> str:
@@ -26,13 +28,13 @@ def db_path(tmp_path: Path) -> str:
 
 @pytest.fixture
 def store(db_path: str) -> TraceStore:
-    return TraceStore(db_path=db_path)
+    return TraceStore(db_path=db_path, hash_secret=_TEST_HASH_SECRET)
 
 
 def test_schema_created_idempotently(db_path: str) -> None:
     # Constructing twice against the same path must not raise.
-    TraceStore(db_path=db_path)
-    TraceStore(db_path=db_path)
+    TraceStore(db_path=db_path, hash_secret=_TEST_HASH_SECRET)
+    TraceStore(db_path=db_path, hash_secret=_TEST_HASH_SECRET)
 
 
 def test_record_request_span_write_and_read_back(store: TraceStore) -> None:
@@ -87,8 +89,8 @@ def test_record_tool_span_hashes_args_not_raw(store: TraceStore) -> None:
     span = store.get_spans("corr-3")[0]
     assert span.args_hash != raw_value
     assert raw_value not in span.args_hash
-    # Deterministic: identical args hash identically.
-    assert span.args_hash == hash_args({"patient_note": raw_value})
+    # Deterministic: identical args + secret hash identically.
+    assert span.args_hash == hash_args({"patient_note": raw_value}, _TEST_HASH_SECRET)
 
 
 def test_record_tool_span_failure_records_error_category(store: TraceStore) -> None:
@@ -231,8 +233,17 @@ def test_no_phi_persisted_across_all_span_types(store: TraceStore, db_path: str)
 
 
 def test_hash_args_is_deterministic_and_order_independent() -> None:
-    assert hash_args({"a": 1, "b": 2}) == hash_args({"b": 2, "a": 1})
+    assert hash_args({"a": 1, "b": 2}, _TEST_HASH_SECRET) == hash_args({"b": 2, "a": 1}, _TEST_HASH_SECRET)
 
 
 def test_hash_args_differs_for_different_values() -> None:
-    assert hash_args({"a": 1}) != hash_args({"a": 2})
+    assert hash_args({"a": 1}, _TEST_HASH_SECRET) != hash_args({"a": 2}, _TEST_HASH_SECRET)
+
+
+def test_hash_args_is_keyed_not_a_bare_hash() -> None:
+    # A bare SHA-256 would let anyone recompute the hash without the secret,
+    # defeating the point of hashing low-entropy args (e.g. a patient id)
+    # instead of storing them raw -- see module docstring's "NO PHI ON DISK"
+    # section. Different secrets over the SAME args must disagree.
+    args = {"patient_id": 42}
+    assert hash_args(args, "secret-one") != hash_args(args, "secret-two")
