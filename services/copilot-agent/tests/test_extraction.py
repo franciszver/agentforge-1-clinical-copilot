@@ -181,14 +181,16 @@ def test_extract_claims_builds_value_omitted_catalog():
     )
 
     messages, _schema = ollama.extract_calls[0]
-    catalog_msg = messages[-1]["content"]
-    assert "call_0" in catalog_msg
-    assert "name" in catalog_msg
-    assert "dose" in catalog_msg
-    # The provenance hook is never a citable field.
-    assert "source_refs" not in catalog_msg
+    # Inspect only the catalog listing (after the "Catalog:" marker); the
+    # instruction preamble legitimately names the "source_refs" output field.
+    catalog_section = messages[-1]["content"].split("Catalog:", 1)[1]
+    assert "call_0" in catalog_section
+    assert "name" in catalog_section
+    assert "dose" in catalog_section
+    # The provenance hook is never listed as a citable field.
+    assert "source_refs" not in catalog_section
     # Values are omitted from the catalog -- only positions are listed.
-    assert "Lisinopril" not in catalog_msg
+    assert "Lisinopril" not in catalog_section
 
 
 def test_extract_claims_short_circuits_when_no_records():
