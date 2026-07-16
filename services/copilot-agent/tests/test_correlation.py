@@ -48,12 +48,42 @@ from app.ollama_client import OllamaClient
 
 
 def test_get_correlation_id_lazily_mints_when_unset():
-    # Fresh process-level default -- no scope bound. Two independent reads
-    # inside two independent scopes must not collide with a hardcoded value,
-    # and must be non-empty.
+    # No scope bound at all -- get_correlation_id() must mint one itself
+    # rather than return empty/None, and the mint must stick for the rest of
+    # this context (a second read returns the SAME id, not a fresh one).
+    from app.correlation import _correlation_id  # internal, test-only peek
+
+    token = _correlation_id.set(None)  # force the "unset" starting state
+    try:
+        first = get_correlation_id()
+        assert first
+        assert get_correlation_id() == first
+    finally:
+        _correlation_id.reset(token)
+
+
+def test_correlation_scope_with_no_argument_mints_a_fresh_id():
     with correlation_scope() as first:
         assert first
         assert get_correlation_id() == first  # stable within the same scope
+
+
+def test_middleware_passes_through_non_http_scopes_untouched():
+    import asyncio
+
+    calls: list[tuple] = []
+
+    async def inner_app(scope, receive, send) -> None:
+        calls.append((scope, receive, send))
+
+    middleware = CorrelationIdMiddleware(inner_app)
+    scope = {"type": "lifespan"}
+    receive = object()
+    send = object()
+
+    asyncio.run(middleware(scope, receive, send))
+
+    assert calls == [(scope, receive, send)]  # untouched -- no header injection wrapper
 
 
 def test_correlation_scope_binds_and_restores_previous_value():
@@ -286,6 +316,7 @@ def test_planner_tool_dispatch_logs_with_the_active_correlation_id(caplog):
                 PlannerDecision(
                     action=PlannerAction.CALL_TOOL, tool=ToolName.GET_MEDICATIONS, reason="go"
                 ),
+                PlannerDecision(action=PlannerAction.ANSWER, reason="done", final_answer="done"),
             ]
 
         def extract(self, messages, schema):
