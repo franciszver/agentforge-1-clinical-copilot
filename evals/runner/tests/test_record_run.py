@@ -117,7 +117,11 @@ def test_compute_run_result_wires_discovery_through_to_a_run_point(tmp_path: Pat
         "patient_id: 1\n"
         "tool_data:\n"
         "  get_medications:\n"
-        "    items: []\n"
+        "    items:\n"
+        "      - name: Lisinopril\n"
+        "        dose: 10mg\n"
+        "        route: oral\n"
+        "        status: active\n"
         "assertions:\n"
         "  - type: first_tool_in\n"
         "    tools: [get_medications]\n",
