@@ -562,7 +562,10 @@ def test_recency_notices_includes_the_stale_records_date():
 
     assert len(notices) == 1
     assert "2014-02-01" in notices[0]
-    assert "get_recent_labs" in notices[0]
+    # Clinician-facing label, not the raw snake_case enum value.
+    assert "lab results" in notices[0]
+    assert "get_recent_labs" not in notices[0]
+    assert "may not reflect the patient's current status" in notices[0]
 
 
 def test_recency_notices_empty_for_all_fresh_records():
@@ -647,3 +650,14 @@ def test_recency_notices_tz_aware_records_do_not_raise():
 
     assert len(notices) == 1
     assert "2014-02-01" in notices[0]
+
+
+def test_recency_notice_uses_clinician_friendly_labels_per_tool():
+    # The label mapping surfaces clinician-facing wording, never the raw
+    # snake_case enum, for every reading tool that carries a threshold.
+    stale = "2014-02-01T09:00:00"
+    vitals = recency_notices([ToolName.GET_VITALS], [{"items": [{"date": stale}]}], _NOW)
+    encounters = recency_notices([ToolName.GET_ENCOUNTERS], [{"items": [{"date": stale}]}], _NOW)
+
+    assert "vital signs" in vitals[0] and "get_vitals" not in vitals[0]
+    assert "encounter records" in encounters[0] and "get_encounters" not in encounters[0]

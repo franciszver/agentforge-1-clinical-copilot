@@ -394,10 +394,31 @@ def stale_record_date(tool: ToolName, record: dict[str, Any], now: datetime) -> 
     return None
 
 
+# Clinician-facing labels for the reading tools that carry a recency
+# threshold -- surfaced in the notice instead of the raw snake_case enum
+# value (``get_recent_labs``). MUST stay in sync with ``_RECENCY_THRESHOLDS``:
+# ``_recency_notice_text`` is only ever reached for a tool that produced a
+# stale date, which by construction has a threshold, so every key here that
+# matters is present (a direct lookup, not ``.get``, keeps this total and the
+# absence of a runtime fallback keeps the branch fully covered).
+_TOOL_LABELS: dict[ToolName, str] = {
+    ToolName.GET_RECENT_LABS: "lab results",
+    ToolName.GET_VITALS: "vital signs",
+    ToolName.GET_ENCOUNTERS: "encounter records",
+}
+
+
 def _recency_notice_text(tool: ToolName, record_date: datetime) -> str:
+    # Wording deliberately does NOT assert the record is discussed in the
+    # answer ("...data above..."): in a multi-tool turn the planner may fetch
+    # a stale reading tool whose data the answer never mentions, so an
+    # in-answer-placement claim would be misleading. The date stays ISO
+    # (``YYYY-MM-DD``) so the year is present for the eval's
+    # ``answer_contains`` check, and the phrase "may not reflect the patient's
+    # current status" is kept verbatim (tests + eval semantics depend on it).
     return (
-        f"Note: the {tool.value} data above is from {record_date.date().isoformat()} "
-        "and may not reflect the patient's current status."
+        f"Note: {_TOOL_LABELS[tool]} from {record_date.date().isoformat()} "
+        "may not reflect the patient's current status."
     )
 
 
