@@ -74,6 +74,20 @@ for "we could not confirm anything in this answer against the record."
 ``NO_VIOLATION``): every factual claim passed citation AND no domain
 constraint was violated at all.
 
+**Seam concern for the answer->claims extraction pipeline (unbuilt).** This
+fold trusts only what the extraction step emits as structured claims. The plan
+(Sec 4.4) names an explicit known limitation: verification covers *claims about
+structured record data* and *cannot* validate free-text clinical reasoning. A
+legitimately reasoning-heavy answer therefore yields few/zero structured claims
+-> ``NONE_VERIFIED`` -> ``blocked`` under this table. That fail-closed floor is
+deliberate here (this module must not invent trust it cannot verify), but it
+means the extraction pipeline -- not this fold -- owns the decision of whether a
+reasoning-only answer should carry a distinct signal (e.g. "no verifiable
+claims by design" vs. "claims that failed re-validation") rather than being
+folded into the same ``NONE_VERIFIED`` bucket. If that distinction is ever
+wanted, it belongs upstream in extraction; changing the fold to soften
+``NONE_VERIFIED`` would overstate trust for the genuinely-unverified case.
+
 **Trace logging (this module's seam, not the durable store).** The plan
 (Sec 4.4(3)) says the verdict is "logged to the trace store." The durable
 trace store is P4.2 (not built) and correlation middleware is P4.1 (not
@@ -147,8 +161,8 @@ _BLOCKING_SEVERITIES = frozenset({InteractionSeverity.MAJOR, InteractionSeverity
 
 
 def _citation_state(total_claim_count: int, stripped_claim_count: int) -> _CitationState:
-    if total_claim_count == 0:
-        return _CitationState.NONE_VERIFIED
+    # ``stripped == total`` is vacuously true at 0/0, so zero-claims collapses
+    # into NONE_VERIFIED here with no separate special-case (see docstring).
     if stripped_claim_count == total_claim_count:
         return _CitationState.NONE_VERIFIED
     if stripped_claim_count == 0:
