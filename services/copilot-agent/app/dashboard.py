@@ -157,21 +157,15 @@ _STYLE = """\
 """
 
 
-def _fmt_alert_value(alert: Alert) -> tuple[str, str]:
-    """Format an alert's current/threshold values per its ``unit`` (set once
-    where the alert is constructed in ``app.dashboard_alerts``) -- ms for
-    latency, percentage for a rate."""
-    fmt = _fmt_ms if alert.unit == "ms" else _fmt_rate
-    return fmt(alert.current_value), fmt(alert.threshold)
-
-
 def _alert_banner(alert: Alert) -> str:
     """One P4.6 alert banner. ``alert.explanation`` is a hardcoded constant
     (see ``app.dashboard_alerts``) and the numeric values come from the
-    metrics DTO -- no user-supplied text is ever interpolated here."""
-    current_str, threshold_str = _fmt_alert_value(alert)
+    metrics DTO -- no user-supplied text is ever interpolated here. Values are
+    formatted per the alert's ``unit`` (set once where the alert is
+    constructed) -- ms for latency, percentage for a rate."""
+    fmt = _fmt_ms if alert.unit == "ms" else _fmt_rate
     return f"""<div class="alert-banner" data-testid="alert-banner" role="alert">
-<div class="alert-banner-title">{alert.metric}: {current_str} (threshold {threshold_str})</div>
+<div class="alert-banner-title">{alert.metric}: {fmt(alert.current_value)} (threshold {fmt(alert.threshold)})</div>
 <div class="alert-banner-body">{alert.explanation}</div>
 </div>"""
 
