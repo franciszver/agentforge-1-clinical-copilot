@@ -9,6 +9,7 @@ no test writes to the configured ``trace_db_path`` (``/data``).
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -21,7 +22,9 @@ from app.main import app
 from app.trace_store import FeedbackThumb, SpanType, TraceStore
 from tests.test_chat_endpoint import FakePlanner
 
-_TEST_HASH_KEY = "test-hash-key"
+# Derived per run (not a hardcoded literal) so no secret-shaped string is
+# committed -- matches tests/conftest.py and tests/test_chat_trace_emission.py.
+_TEST_HASH_KEY = secrets.token_hex(16)
 
 
 @pytest.fixture(autouse=True)

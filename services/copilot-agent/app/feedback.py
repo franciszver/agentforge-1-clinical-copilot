@@ -70,12 +70,16 @@ class FeedbackResponse(BaseModel):
     thumb: FeedbackThumb
 
 
-async def feedback_endpoint(
+def feedback_endpoint(
     request: FeedbackRequest,
     authorization: str | None = Header(default=None),
     validator: TokenValidator = Depends(get_token_validator),
     trace_store: TraceStore = Depends(get_trace_store),
 ) -> FeedbackResponse:
+    # Plain `def`, not `async def`: record_feedback_span does blocking
+    # sqlite3 I/O. FastAPI runs a sync path-operation function in its
+    # worker-thread pool automatically, so the write never blocks the event
+    # loop -- same reasoning as app.chat.get_planner_factory's sync dispatch.
     try:
         token = extract_bearer_token(authorization)
         validator(token)
