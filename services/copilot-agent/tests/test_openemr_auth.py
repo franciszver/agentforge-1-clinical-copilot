@@ -142,3 +142,80 @@ def test_authenticated_get_sets_bearer_header_and_returns_200_body():
     assert captured["authorization"] == "Bearer my-access-token"
     assert response.status_code == 200
     assert response.json()["resourceType"] == "Bundle"
+
+
+# --- #124 Phase 1: production authorization_code client registration -------
+
+# The canonical browser-facing module OAuth callback. Phase 2's authorize/
+# callback must match this byte-for-byte (OpenEMR requires exact redirect_uri
+# matching). It is the BROWSER host (localhost:9300), not the internal
+# ``openemr`` docker alias used for the server-side registration call.
+_CANONICAL_REDIRECT_URI = (
+    "https://localhost:9300/interface/modules/custom_modules/"
+    "oe-module-clinical-copilot/public/oauth-callback.php"
+)
+# SMART scopes reconciled against OpenEMR's
+# ServerScopeListEntity::getAllSupportedScopesList() -- ``user/*.read`` is
+# dropped (OpenEMR has no wildcard scope and silently strips it).
+_RECONCILED_PROD_SCOPES = (
+    "openid offline_access launch launch/patient api:oemr api:fhir fhirUser"
+)
+
+
+def test_register_prod_client_sends_authz_code_payload():
+    """The prod registration path posts the confidential authorization_code
+    payload: canonical redirect_uri, reconciled SMART scopes, both
+    authorization_code + refresh_token grants, application_type private."""
+    from app.config import Settings
+    from app.prod_client_registration import register_prod_client
+
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(201, json={"client_id": "pc-1", "client_secret": "x"})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        creds = register_prod_client(client, settings=Settings())
+
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["application_type"] == "private"
+    assert "authorization_code" in body["grant_types"]
+    assert "refresh_token" in body["grant_types"]
+    assert body["response_types"] == ["code"]
+    assert body["redirect_uris"] == [_CANONICAL_REDIRECT_URI]
+    assert body["scope"] == _RECONCILED_PROD_SCOPES
+    # OpenEMR silently strips wildcard scopes -- none must be requested.
+    assert "user/*" not in str(body["scope"])
+    assert isinstance(creds, ClientCredentials)
+    assert creds.client_id == "pc-1"
+
+
+def test_dev_register_cli_payload_unchanged(tmp_path, monkeypatch):
+    """Regression guard: #124 Phase 1 must not alter the DEV bridge's
+    registration inputs (internal callback redirect + explicit per-resource
+    dev scopes). Drives the real ``_register_cli`` with register_client faked."""
+    from app import dev_token_bridge
+    from app.openemr_auth import ClientCredentials as _Creds
+
+    captured: dict[str, object] = {}
+
+    def fake_register_client(client, **kwargs):  # noqa: ANN001, ANN003
+        captured.update(kwargs)
+        return _Creds(client_id="d-1", client_secret="y", registration_access_token="")
+
+    monkeypatch.setattr(dev_token_bridge, "register_client", fake_register_client)
+    monkeypatch.setenv("COPILOT_DEV_CLIENT_CREDS_PATH", str(tmp_path / "creds.json"))
+
+    assert dev_token_bridge._register_cli() == 0
+
+    assert captured["client_name"] == "copilot-agent-dev-bridge"
+    assert captured["redirect_uris"] == ["https://openemr/oauth2/default/callback"]
+    assert captured["scope"] == (
+        "openid offline_access api:oemr api:fhir user/patient.read "
+        "user/medication.read user/allergy.read user/medical_problem.read "
+        "user/encounter.read user/appointment.read user/vital.read "
+        "user/procedure.read user/Observation.read"
+    )
