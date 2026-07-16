@@ -27,6 +27,16 @@ Auth: gated by the SAME bearer-token seam as ``POST /chat``
 to prevent anonymous feedback spam. Reuses the seam rather than
 reimplementing a second one.
 
+Ownership gap (LOW severity, deferred with real auth): this endpoint does not
+verify the authenticated caller originated ``correlation_id`` -- any valid
+bearer can attach feedback to any id. Blast radius is spam of a no-PHI signal
+(a thumb/comment span; no read path, no PHI), gated behind knowing an
+unguessable correlation id disclosed only to its own requester. Binding
+feedback to the originating identity belongs with real token introspection
+(see ``app.chat._default_token_validator``'s TODO), where "the authenticated
+caller" first becomes a meaningful principal to check ownership against;
+against the current accept-any-token stub such a check would be theatre.
+
 No PHI: the comment is user-authored text about the response, not patient
 record data -- see ``app.trace_store`` module docstring, which already
 documents this as an explicitly permitted verbatim-stored field. Bounded to
