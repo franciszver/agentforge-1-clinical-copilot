@@ -126,6 +126,7 @@ class GuzzleAuthorizationCodeExchangerTest extends TestCase
             authorizeUrl: 'https://localhost:9300/oauth2/default/authorize',
             tokenUrl: self::PUBLIC_TOKEN_URL,
             internalTokenUrl: self::INTERNAL_TOKEN_URL,
+            audience: 'https://localhost:9300/apis/default/fhir',
         );
     }
 }

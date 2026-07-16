@@ -81,6 +81,7 @@ final readonly class OAuthConsentConfig
         public string $authorizeUrl,
         public string $tokenUrl,
         public string $internalTokenUrl,
+        public string $audience,
     ) {
     }
 
@@ -103,6 +104,10 @@ final readonly class OAuthConsentConfig
             authorizeUrl: $server->getAuthorizeUrl(),
             tokenUrl: $server->getTokenUrl(),
             internalTokenUrl: self::resolveInternalTokenUrl($globals),
+            // SMART `aud`: OpenEMR forces this to the FHIR/API resource base (not
+            // the token endpoint) whenever a launch token is present. This is the
+            // browser-facing FHIR base, so it stays on the public origin.
+            audience: $server->getFhirUrl(),
         );
     }
 

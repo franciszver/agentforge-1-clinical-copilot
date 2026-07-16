@@ -211,6 +211,7 @@ class AgentTokenBrokerTest extends TestCase
             authorizeUrl: 'https://localhost:9300/oauth2/default/authorize',
             tokenUrl: 'https://localhost:9300/oauth2/default/token',
             internalTokenUrl: 'https://openemr/oauth2/default/token',
+            audience: 'https://localhost:9300/apis/default/fhir',
         );
     }
 
