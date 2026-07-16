@@ -208,7 +208,18 @@ class AuthorizeRedirectControllerTest extends TestCase
             ->willReturnCallback(function (string $key, mixed $default = null) use (&$store): mixed {
                 return $store[$key] ?? $default;
             });
+        $session->method('remove')
+            ->willReturnCallback(function (string $key) use (&$store): mixed {
+                $value = $store[$key] ?? null;
+                unset($store[$key]);
+
+                return $value;
+            });
         CsrfUtils::setupCsrfKey($session);
+
+        // The controller writes the PKCE verifier via SessionUtil, which routes
+        // through the factory's active session -- so this stub must be active.
+        SessionWrapperFactory::getInstance()->setActiveSession($session);
 
         return $session;
     }
