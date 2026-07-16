@@ -31,6 +31,12 @@ markers = [
 files = ["app"]
 ignore_missing_imports = true
 
+[tool.coverage.report]
+exclude_also = [
+    "assert_never\\(",
+    "case _:$",
+]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
