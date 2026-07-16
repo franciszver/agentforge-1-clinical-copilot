@@ -20,12 +20,10 @@ enables S256 at the grant level). Nothing PKCE-related is declared here.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import httpx
 
 from app.config import Settings
+from app.creds_file import write_creds_securely
 from app.openemr_auth import ClientCredentials, register_client
 
 _PROD_CLIENT_NAME = "copilot-agent-prod"
@@ -72,9 +70,9 @@ def _register_cli() -> int:
     settings = Settings()
     with _build_http_client(settings) as client:
         creds = register_prod_client(client, settings=settings)
-    Path(settings.copilot_prod_client_creds_path).write_text(
-        json.dumps({"client_id": creds.client_id, "client_secret": creds.client_secret}),
-        encoding="utf-8",
+    write_creds_securely(
+        settings.copilot_prod_client_creds_path,
+        {"client_id": creds.client_id, "client_secret": creds.client_secret},
     )
     print(f"CLIENT_ID={creds.client_id}")
     print(

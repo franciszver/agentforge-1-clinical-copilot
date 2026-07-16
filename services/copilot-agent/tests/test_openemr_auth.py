@@ -6,6 +6,8 @@ outside the test suite.
 """
 
 import json
+import os
+import stat
 
 import httpx
 import pytest
@@ -219,3 +221,56 @@ def test_dev_register_cli_payload_unchanged(tmp_path, monkeypatch):
         "user/encounter.read user/appointment.read user/vital.read "
         "user/procedure.read user/Observation.read"
     )
+
+
+# --- #176: OAuth client-secret creds file must be owner-only (0o600) --------
+
+
+def _stub_prod_registration(monkeypatch, tmp_path):
+    """Point the prod CLI at a tmp creds file and stub the network call."""
+    from app import prod_client_registration as prod
+    from app.openemr_auth import ClientCredentials as _Creds
+
+    monkeypatch.setattr(
+        prod,
+        "register_prod_client",
+        lambda client, *, settings: _Creds(
+            client_id="pc-1", client_secret="x", registration_access_token=""
+        ),
+    )
+    creds_file = tmp_path / "prod-creds.json"
+    monkeypatch.setenv("COPILOT_PROD_CLIENT_CREDS_PATH", str(creds_file))
+    return prod, creds_file
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes do not apply on Windows")
+def test_prod_creds_file_is_owner_only_posix(tmp_path, monkeypatch):
+    """The creds file (holds the OAuth client_secret) is written 0o600."""
+    prod, creds_file = _stub_prod_registration(monkeypatch, tmp_path)
+
+    assert prod._register_cli() == 0
+
+    assert creds_file.exists()
+    mode = stat.S_IMODE(os.stat(creds_file).st_mode)
+    assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
+
+
+def test_prod_creds_write_invokes_secure_chmod(tmp_path, monkeypatch):
+    """Platform-independent: the write path enforces 0o600 via os.chmod.
+
+    On Windows POSIX modes are a no-op, so instead of asserting the on-disk
+    mode we assert the secure-write primitive (chmod to 0o600) is invoked."""
+    prod, creds_file = _stub_prod_registration(monkeypatch, tmp_path)
+
+    chmod_calls: list[tuple[str, int]] = []
+    real_chmod = os.chmod
+
+    def spy_chmod(path, mode, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        chmod_calls.append((str(path), mode))
+        return real_chmod(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "chmod", spy_chmod)
+
+    assert prod._register_cli() == 0
+
+    assert (str(creds_file), 0o600) in chmod_calls
