@@ -153,7 +153,7 @@ def _entry_card(entry: ReviewQueueEntry) -> str:
     badges = ""
     if entry.feedback_thumb == FeedbackThumb.DOWN:
         badges += '<span class="badge badge-down">thumbs down</span> '
-    if entry.verdict is not None and entry.verdict != "verified":
+    if entry.has_unverified_verdict:
         badges += f'<span class="badge badge-verdict">verdict: {_esc(entry.verdict)}</span>'
 
     comment_html = (

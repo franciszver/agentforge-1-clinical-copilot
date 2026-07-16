@@ -74,6 +74,12 @@ class ReviewQueueEntry:
     tool_call_count: int
     request_duration_ms: float | None
 
+    @property
+    def has_unverified_verdict(self) -> bool:
+        """A verification ran and did not return ``verified`` -- the signal that
+        both puts this trace on the queue and renders its verdict badge."""
+        return self.verdict is not None and self.verdict != "verified"
+
 
 def _latest_feedback(feedback_spans: list[Span]) -> Span | None:
     """Same dedup rule as the P4.5 dashboard's ``_FEEDBACK_DEDUP_SQL`` (#54):
@@ -88,10 +94,18 @@ def _latest_feedback(feedback_spans: list[Span]) -> Span | None:
     return candidates[-1]
 
 
+def _latest_verification(spans: list[Span]) -> Span | None:
+    """The most recently written verification span in a trace (its whole-answer
+    verdict), or ``None`` if the trace has none. ``spans`` is in insertion order
+    (as ``TraceStore.get_spans`` returns), so the last match is the highest
+    ``id``."""
+    verification_spans = [span for span in spans if span.span_type == SpanType.VERIFICATION]
+    return verification_spans[-1] if verification_spans else None
+
+
 def _build_entry(correlation_id: str, spans: list[Span]) -> ReviewQueueEntry:
     feedback = _latest_feedback([span for span in spans if span.span_type == SpanType.FEEDBACK])
-    verification_spans = [span for span in spans if span.span_type == SpanType.VERIFICATION]
-    verification = verification_spans[-1] if verification_spans else None
+    verification = _latest_verification(spans)
     tool_call_count = sum(1 for span in spans if span.span_type == SpanType.TOOL)
     request_spans = [span for span in spans if span.span_type == SpanType.REQUEST]
     request_duration_ms = request_spans[-1].duration_ms if request_spans else None
@@ -109,7 +123,7 @@ def _build_entry(correlation_id: str, spans: list[Span]) -> ReviewQueueEntry:
 def _belongs_on_the_queue(entry: ReviewQueueEntry) -> bool:
     if entry.feedback_thumb == FeedbackThumb.DOWN:
         return True
-    return entry.verdict is not None and entry.verdict != "verified"
+    return entry.has_unverified_verdict
 
 
 def _distinct_correlation_ids(db_path: str) -> list[str]:
@@ -162,9 +176,14 @@ def _slugify_correlation_id(correlation_id: str) -> str:
 
 
 def _failure_mode(feedback: Span | None, verification: Span | None, correlation_id: str) -> str:
-    if feedback is not None and feedback.feedback_comment:
-        return feedback.feedback_comment
-    if feedback is not None:
+    # Only a thumbs-DOWN describes a failure. A trace can reach this generator
+    # on an unverified verdict alone while its deduped feedback is a thumbs-UP
+    # (``_latest_feedback`` picks by comment/recency, not polarity) -- treating
+    # that as a "thumbs-down" would emit praise, or a false "thumbs-down" label,
+    # as the failure_mode. Fall through to the verdict-based message instead.
+    if feedback is not None and feedback.feedback_thumb == FeedbackThumb.DOWN:
+        if feedback.feedback_comment:
+            return feedback.feedback_comment
         return f"Promoted from a thumbs-down (no comment left) on correlation id {correlation_id}."
     if verification is not None:
         return (
@@ -212,8 +231,7 @@ def generate_regression_case(spans: list[Span]) -> str:
     case_id = f"promoted-{_slugify_correlation_id(correlation_id)}"
 
     feedback = _latest_feedback([span for span in spans if span.span_type == SpanType.FEEDBACK])
-    verification_spans = [span for span in spans if span.span_type == SpanType.VERIFICATION]
-    verification = verification_spans[-1] if verification_spans else None
+    verification = _latest_verification(spans)
 
     if verification is not None:
         assertions: list[dict[str, object]] = [{"type": "verdict", "equals": verification.verdict}]

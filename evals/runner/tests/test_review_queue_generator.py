@@ -31,7 +31,6 @@ import yaml
 from app.review_queue import generate_regression_case
 from app.trace_store import FeedbackThumb, Span, SpanStatus, SpanType
 from runner.loader import load_case
-from runner.schema import EvalCaseError
 
 
 def _span(
@@ -127,6 +126,38 @@ def test_verification_failure_produces_a_schema_valid_case_with_verdict_assertio
     assert verdict_assertions[0].equals.value == "blocked"
 
 
+def test_thumbs_up_feedback_on_an_unverified_verdict_is_not_labeled_a_failure(tmp_path: Path) -> None:
+    """A trace reaches the generator on a non-verified verdict alone while its
+    deduped feedback is a thumbs-UP (with a comment). ``failure_mode`` must NOT
+    echo that positive comment or claim a thumbs-down -- it describes the
+    verification failure that actually put the trace on the queue."""
+    positive_comment = "Great, concise answer -- exactly what I needed."
+    spans = [
+        _span(id=1, span_type=SpanType.REQUEST),
+        _span(
+            id=2,
+            span_type=SpanType.VERIFICATION,
+            verdict="blocked",
+            claim_count=2,
+            stripped_count=2,
+        ),
+        _span(
+            id=3,
+            span_type=SpanType.FEEDBACK,
+            feedback_thumb=FeedbackThumb.UP,
+            feedback_comment=positive_comment,
+        ),
+    ]
+
+    text = generate_regression_case(spans)
+    case = _load(tmp_path, text)
+
+    assert case.failure_mode is not None
+    assert positive_comment not in case.failure_mode
+    assert "thumbs-down" not in case.failure_mode
+    assert "verdict=blocked" in case.failure_mode
+
+
 def test_case_id_is_kebab_case_and_stable_for_the_same_correlation_id(tmp_path: Path) -> None:
     spans = [_span(id=1, correlation_id="corr-xyz-123", span_type=SpanType.REQUEST)]
 
@@ -205,12 +236,11 @@ def test_minimal_trace_with_no_feedback_or_verification_still_produces_a_valid_s
     assert len(case.assertions) >= 1
 
 
-def test_malformed_input_missing_correlation_id_field_does_not_crash_the_generator() -> None:
-    # Sanity: EvalCaseError should never leak from the generator itself --
-    # only from load_case, which these other tests already exercise via the
-    # loader. This asserts the generator is a pure function that always
-    # returns text (or raises ValueError on the documented empty case),
-    # never an uncaught exception for a span shape it doesn't recognize.
+def test_unrecognized_span_shape_does_not_crash_the_generator() -> None:
+    # A trace of only spans the generator doesn't special-case (here an LLM
+    # span, no request/feedback/verification) must still return text, never
+    # raise an uncaught exception -- the generator is a pure function that
+    # only raises the documented ValueError on the empty-trace case.
     spans = [_span(id=1, span_type=SpanType.LLM, model="qwen3:4b", tokens_in=10, tokens_out=20)]
     text = generate_regression_case(spans)
     assert isinstance(text, str) and text.strip()
@@ -220,12 +250,9 @@ def test_output_is_well_formed_yaml_with_a_header_comment(tmp_path: Path) -> Non
     spans = [_span(id=1, span_type=SpanType.REQUEST)]
     text = generate_regression_case(spans)
 
-    # Parses cleanly (no YAMLError) and is not silently accepted by the
-    # loader despite being malformed -- load_case raises EvalCaseError only
-    # for genuinely broken input, never for this generator's own output.
+    # Parses cleanly (no YAMLError) and loads via the real loader -- load_case
+    # raises EvalCaseError only for genuinely broken input, never for this
+    # generator's own output, so an unhandled raise here fails the test outright.
     parsed = yaml.safe_load(text)
     assert isinstance(parsed, dict)
-    try:
-        _load(tmp_path, text)
-    except EvalCaseError as exc:
-        pytest.fail(f"generator output failed to load: {exc}")
+    _load(tmp_path, text)
