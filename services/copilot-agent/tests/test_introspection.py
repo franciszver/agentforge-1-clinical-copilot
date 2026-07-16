@@ -2,7 +2,7 @@
 
 All HTTP is served by ``httpx.MockTransport`` -- the suite never touches the
 network. Covers the low-level ``introspect_token`` primitive (active / inactive
-/ malformed / non-2xx / network-error, Basic-auth header, token-not-in-URL,
+/ malformed / non-2xx / network-error, body client_secret_post auth, token-not-in-URL,
 no-token/secret logging), the short-TTL ``TokenIntrospector`` cache (hash-keyed,
 network only re-hit when uncached), and the introspection-based validator's
 active/inactive/expired/empty mapping to ``TokenValidationError``.
