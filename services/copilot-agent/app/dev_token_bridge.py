@@ -37,7 +37,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, TypeGuard
 
 import httpx
 
@@ -74,6 +74,20 @@ class _CachedToken:
 
 
 ClientFactory = Callable[[], httpx.Client]
+
+
+def _build_http_client(settings: Settings) -> httpx.Client:
+    """Build the OpenEMR-facing HTTP client from settings (single construction
+    point so TLS/timeout wiring stays consistent across the bridge)."""
+    return httpx.Client(
+        verify=settings.openemr_verify_ssl,
+        timeout=settings.openemr_api_timeout_seconds,
+    )
+
+
+def _is_nonempty_str(value: object) -> TypeGuard[str]:
+    """True only for a present, non-empty string (narrows the type for callers)."""
+    return isinstance(value, str) and bool(value)
 
 
 class DevTokenBridge:
@@ -125,10 +139,7 @@ class DevTokenBridge:
         path, demo credential, and scopes from ``Settings``."""
 
         def _client_factory() -> httpx.Client:
-            return httpx.Client(
-                verify=settings.openemr_verify_ssl,
-                timeout=settings.openemr_api_timeout_seconds,
-            )
+            return _build_http_client(settings)
 
         return cls(
             base_url=settings.openemr_base_url,
@@ -199,7 +210,7 @@ class DevTokenBridge:
             raise DevTokenError("dev client credentials file missing client_id/client_secret")
         client_id = data.get("client_id")
         client_secret = data.get("client_secret")
-        if not isinstance(client_id, str) or not client_id or not isinstance(client_secret, str) or not client_secret:
+        if not _is_nonempty_str(client_id) or not _is_nonempty_str(client_secret):
             raise DevTokenError("dev client credentials file missing client_id/client_secret")
         return client_id, client_secret
 
@@ -215,10 +226,7 @@ def _register_cli() -> int:
     file and is never printed.
     """
     settings = Settings()
-    with httpx.Client(
-        verify=settings.openemr_verify_ssl,
-        timeout=settings.openemr_api_timeout_seconds,
-    ) as client:
+    with _build_http_client(settings) as client:
         creds = register_client(
             client,
             base_url=settings.openemr_base_url,
