@@ -57,7 +57,7 @@ additional logic. This module does not compute a verdict itself.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from app.schemas.common import SourceRef
 from app.verification import ClaimCheckResult
@@ -80,7 +80,7 @@ class Notice:
     of the original claim text or which citation(s) failed -- see module
     docstring."""
 
-    text: str = field(default=_NOT_FOUND_NOTICE_TEXT)
+    text: str = _NOT_FOUND_NOTICE_TEXT
 
 
 AnswerSegment = RenderedClaim | Notice
