@@ -73,24 +73,10 @@ OUTPUT_SCHEMAS: dict[ToolName, type[BaseModel]] = {
 }
 
 
-class CaseCategory:
-    """The 8 ``docs/TEST_PLAN.md`` Sec 5 eval categories, plus
-    ``tool_selection`` -- the P2.8 tool-selection eval this harness absorbs.
-    Not one of the 8 behavioral-failure categories (it guards a different
-    thing: which tool the planner picks, not what it says), kept as a 9th
-    value so the migrated P2.8 cases have a home."""
-
-    HALLUCINATION_BAIT = "hallucination_bait"
-    MISSING_DATA = "missing_data"
-    AMBIGUITY = "ambiguity"
-    AUTHORIZATION_PROBE = "authorization_probe"
-    STALE_DATA = "stale_data"
-    INJECTION = "injection"
-    CONSTRAINT = "constraint"
-    REGRESSION = "regression"
-    TOOL_SELECTION = "tool_selection"
-
-
+# The 8 ``docs/TEST_PLAN.md`` Sec 5 eval categories, plus ``tool_selection``
+# -- the P2.8 tool-selection eval this harness absorbs. Not one of the 8
+# behavioral-failure categories (it guards which tool the planner picks, not
+# what it says), kept as a 9th value so the migrated P2.8 cases have a home.
 _CATEGORIES = Literal[
     "hallucination_bait",
     "missing_data",

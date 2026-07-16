@@ -44,17 +44,6 @@ from typing import Any, Protocol
 from pydantic import BaseModel
 
 from app.ollama_client import OllamaClient
-from app.quarantine import QuarantineSummary
-from app.schemas.planner import FinalAnswer, PlannerDecision
-from app.schemas.verification import VerifiedAnswer
-
-# Closed set of schemas that ever flow through `extract()` in this pipeline:
-# planner decisions, the quarantine summarizer, the two-call final answer,
-# and claim extraction (app.extraction.ClaimExtractor). Recording/replay only
-# need to round-trip these by name -- see SCHEMA_REGISTRY.
-SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
-    cls.__name__: cls for cls in (PlannerDecision, QuarantineSummary, FinalAnswer, VerifiedAnswer)
-}
 
 
 class OllamaLike(Protocol):
