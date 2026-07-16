@@ -16,8 +16,10 @@ import pytest
 
 from app.data.drug_interactions import (
     CHECKSUM_PATH,
+    DB_PATH,
     SEVERITY_LEVELS,
     SOURCE_PATH,
+    InteractionRow,
     build_database,
     canonical_checksum,
     canonical_pair,
@@ -160,3 +162,22 @@ def test_committed_checksum_matches_current_source() -> None:
     proves the committed artifact isn't stale relative to source."""
     committed = CHECKSUM_PATH.read_text(encoding="utf-8").strip()
     assert committed == canonical_checksum(load_source_rows())
+
+
+def test_committed_database_matches_committed_checksum() -> None:
+    """The checked-in ``.db`` -- the exact artifact P3.6 queries at runtime --
+    must contain the data recorded in the committed checksum. Rebuild-from-
+    source tests don't touch this file, so without this a hand-edited or
+    stale committed ``.db`` would ship wrong data to runtime uncaught."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        db_rows = [
+            InteractionRow(*record)
+            for record in conn.execute(
+                "SELECT drug_lo, drug_hi, severity, mechanism FROM interactions"
+            )
+        ]
+    finally:
+        conn.close()
+    committed = CHECKSUM_PATH.read_text(encoding="utf-8").strip()
+    assert canonical_checksum(db_rows) == committed
