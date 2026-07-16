@@ -189,10 +189,20 @@ class OllamaClient:
 
         for _ in range(self._max_retries):
             start_ts = time.time()
+            # Network/HTTP failures are NOT retried (see docstring): keep the
+            # ``_post_chat`` call OUT of the retry-catch below so an
+            # ``OllamaError`` from it propagates immediately, after recording
+            # the failed attempt's stats (symmetric with ``chat``).
+            try:
+                response = self._post_chat(body)
+            except OllamaError:
+                self.call_stats.append(
+                    LlmCallStats(model=self._model, start_ts=start_ts, end_ts=time.time(), ok=False, tokens_in=None, tokens_out=None)
+                )
+                raise
             tokens_in: int | None = None
             tokens_out: int | None = None
             try:
-                response = self._post_chat(body)
                 content, tokens_in, tokens_out = self._single_message_content(response)
                 payload = json.loads(content)
                 result = schema.model_validate(payload)

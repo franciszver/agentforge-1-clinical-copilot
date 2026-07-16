@@ -357,6 +357,30 @@ def test_extract_records_one_call_stats_entry_per_attempt_including_failed_retri
     assert client.call_stats[1].tokens_out == 3
 
 
+def test_extract_http_error_propagates_immediately_without_retry():
+    # Contract (see extract() docstring): network/HTTP failures are NOT
+    # retried -- they propagate immediately. Recording the failed attempt's
+    # call_stats must not turn an HTTP error into a retried one.
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(500, text="internal stack trace detail")
+
+    client = _client(handler, max_retries=2)
+    with pytest.raises(OllamaError):
+        client.extract([{"role": "user", "content": "describe a cat"}], _Animal)
+
+    # Exactly ONE upstream request was made (no retry on HTTP error), and it
+    # recorded a single failed call_stats entry with no token counts.
+    assert call_count == 1
+    assert len(client.call_stats) == 1
+    assert client.call_stats[0].ok is False
+    assert client.call_stats[0].tokens_in is None
+    assert client.call_stats[0].tokens_out is None
+
+
 # --- live integration: real qwen3:4b -----------------------------------
 #
 # Ollama is internal-only on the dev stack's docker network (no host port
