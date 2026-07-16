@@ -15,7 +15,7 @@ Hermetic and fully deterministic: no fixtures touch a real Ollama/OpenEMR.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.quarantine import REDACTED_SENTINEL
 from app.schemas.common import SourceRef
@@ -598,3 +598,52 @@ def test_recency_notices_dedupes_multiple_records_with_the_same_stale_date():
     notices = recency_notices(tools, raw_results, _NOW)
 
     assert len(notices) == 1
+
+
+# ---------------------------------------------------------------------------
+# Timezone safety (#153): real OpenEMR/FHIR record dates can be tz-AWARE
+# (offset-qualified), while an injected ``now`` may be naive (the eval's fixed
+# clock) or aware (production ``datetime.now(timezone.utc)``). Comparing a
+# naive against an aware datetime raises ``TypeError`` -- which would crash a
+# live ``/chat`` on the first stale record -- so the comparison must normalize
+# both sides. Naive datetimes are treated as UTC. The returned date is the raw
+# parsed value (aware stays aware, naive stays naive) -- only the staleness
+# COMPARISON is normalized.
+# ---------------------------------------------------------------------------
+
+
+def test_stale_record_date_tz_aware_record_against_naive_now():
+    record = {"date": "2014-02-01T09:00:00+00:00"}  # aware
+
+    result = stale_record_date(ToolName.GET_RECENT_LABS, record, _NOW)  # _NOW naive
+
+    assert result == datetime(2014, 2, 1, 9, 0, 0, tzinfo=timezone.utc)
+
+
+def test_stale_record_date_naive_record_against_tz_aware_now():
+    record = {"date": "2014-02-01T09:00:00"}  # naive
+    now_aware = datetime(2026, 7, 15, tzinfo=timezone.utc)
+
+    result = stale_record_date(ToolName.GET_RECENT_LABS, record, now_aware)
+
+    assert result == datetime(2014, 2, 1, 9, 0, 0)
+
+
+def test_stale_record_date_fresh_tz_aware_record_against_naive_now_does_not_fire():
+    record = {"date": "2026-06-01T09:00:00+00:00"}  # aware, recent
+
+    result = stale_record_date(ToolName.GET_RECENT_LABS, record, _NOW)
+
+    assert result is None
+
+
+def test_recency_notices_tz_aware_records_do_not_raise():
+    tools = [ToolName.GET_VITALS]
+    raw_results = [
+        {"items": [{"vital_type": "weight", "value": 150, "date": "2014-02-01T09:00:00+00:00"}]}
+    ]
+
+    notices = recency_notices(tools, raw_results, _NOW)  # naive now, aware record
+
+    assert len(notices) == 1
+    assert "2014-02-01" in notices[0]

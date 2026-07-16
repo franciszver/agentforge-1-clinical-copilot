@@ -180,7 +180,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Any
 
@@ -352,6 +352,22 @@ _RECENCY_THRESHOLDS: dict[ToolName, timedelta] = {
 }
 
 
+def _as_aware_utc(value: datetime) -> datetime:
+    """Normalize a datetime to timezone-aware UTC for comparison.
+
+    Real OpenEMR/FHIR record dates can be tz-AWARE (offset-qualified) while an
+    injected ``now`` may be naive (the eval's fixed clock) or aware
+    (production ``datetime.now(timezone.utc)``) -- and subtracting a naive from
+    an aware datetime raises ``TypeError``, which would crash a live ``/chat``
+    on the first stale record. A naive datetime is interpreted as UTC (the
+    zone OpenEMR stores in, and the zone production's ``now`` uses); an aware
+    one is converted to UTC. Used only to make the staleness COMPARISON
+    tz-safe -- never to alter a value returned to callers."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def stale_record_date(tool: ToolName, record: dict[str, Any], now: datetime) -> datetime | None:
     """The record's ``date`` field if ``tool`` has a recency threshold, the
     field parses (``app.tools._common.parse_fhir_datetime`` -- the same
@@ -359,14 +375,21 @@ def stale_record_date(tool: ToolName, record: dict[str, Any], now: datetime) -> 
     already use for this exact field), and that date is older than the
     threshold relative to ``now`` -- else ``None``. Pure and clock-injected:
     ``now`` is always the caller's own value, never read internally (see
-    module docstring, "The one clock exception")."""
+    module docstring, "The one clock exception").
+
+    The staleness comparison is tz-safe: both ``now`` and the record date are
+    normalized to aware-UTC (``_as_aware_utc``, naive treated as UTC) before
+    subtraction, so a tz-aware record date and a naive ``now`` (or vice versa)
+    compare cleanly instead of raising ``TypeError``. The datetime RETURNED is
+    the raw parsed value (aware stays aware, naive stays naive) -- only the
+    comparison is normalized."""
     threshold = _RECENCY_THRESHOLDS.get(tool)
     if threshold is None:
         return None
     record_date = parse_fhir_datetime(record.get("date"))
     if record_date is None:
         return None
-    if now - record_date > threshold:
+    if _as_aware_utc(now) - _as_aware_utc(record_date) > threshold:
         return record_date
     return None
 
