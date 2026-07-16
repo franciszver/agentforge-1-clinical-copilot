@@ -437,8 +437,7 @@
     }
 
     function applyFeedbackSuccessState(widget, thumb) {
-        widget.upBtn.disabled = true;
-        widget.downBtn.disabled = true;
+        applyFeedbackPendingState(widget);
         widget.wrapper.classList.add('copilot-feedback-submitted');
         var selectedBtn = thumb === 'up' ? widget.upBtn : widget.downBtn;
         selectedBtn.classList.add('copilot-feedback-selected');
