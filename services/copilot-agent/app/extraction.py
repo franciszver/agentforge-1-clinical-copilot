@@ -371,13 +371,36 @@ def apply_recency_notice(result: PlannerResult, *, now: datetime) -> PlannerResu
     .recency_notices``, #153) to ``result.answer`` for every stale record
     returned this turn.
 
-    Deliberately independent of ``run_verification``/claim extraction --
-    see ``app.verification``'s module docstring, "Recency notices", for why:
-    this must work from ``Planner.run()``'s output alone (no LLM call), so it
-    fires even for a turn whose recorded run never reaches the extraction
-    stage. Returns ``result`` unchanged (same object) when nothing is stale,
-    so callers can call this unconditionally with no cost on the common
-    case."""
+    Deliberately independent of ``run_verification``/claim extraction -- see
+    ``app.verification``'s "Recency notices" section for why. Returns
+    ``result`` unchanged (same object) when nothing is stale, so callers can
+    call this unconditionally with no cost on the common case.
+
+    Reads ``result.raw_results`` -- the verifier-only, un-redacted channel
+    (``app.planner.PlannerResult``'s docstring: "must never be forwarded
+    into an LLM prompt or the SSE trace") -- but only ever extracts a
+    ``date``, never free text, and only to append it to the answer text
+    that already reaches the SSE ``answer`` frame. This is not a new
+    exposure: ``app.quarantine`` already passes ``datetime``/``date``/
+    ``time`` values through the CLIENT-FACING (quarantined) channel
+    verbatim -- only free-text *strings* are redacted -- so the model (and
+    the client) already sees this same date today via the quarantined tool
+    result (e.g. ``stale-only-vitals.yaml``'s recorded answer already names
+    "February 1, 2014" from that channel, unprompted).
+
+    NOT wired into ``app.chat``'s live SSE stream (only into the eval
+    pipeline, ``runner.pipeline.run_case``) as of #153 -- a known follow-up,
+    not an oversight: doing so safely needs its own design pass, since real
+    OpenEMR/FHIR record dates may arrive timezone-AWARE (offset-qualified)
+    while this module's ``now`` is caller-supplied and today only exercised
+    naive (see the eval's fixed ``now`` and this module's own tests) --
+    mixing the two raises ``TypeError`` at runtime, not a 2-line fix.
+    A structured alternative -- folding recency into ``VerdictResult``
+    alongside the allergy/interaction checks (also deterministic, also
+    ``raw_results``-only) rather than splicing text onto ``result.answer``
+    -- was considered and deliberately deferred too, to keep this change
+    scoped to what the offline eval needs; that would also make the SSE
+    wiring above nearly free once done."""
     tools = [entry.tool for entry in result.trace]
     notices = recency_notices(tools, result.raw_results, now)
     if not notices:

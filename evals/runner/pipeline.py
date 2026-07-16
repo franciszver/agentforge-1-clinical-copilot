@@ -11,18 +11,14 @@ tool-selection case's recording therefore only has to carry the planner's own
 turns, not an unused claim-extraction call -- judgment call documented in
 ``runner.schema``'s module docstring.
 
-**Recency notices (#153) are NOT lazy** -- unlike verification above, every
+**Recency notices (#153) are NOT lazy**, unlike verification above -- every
 case runs ``app.extraction.apply_recency_notice`` unconditionally, right
-after the planner turn. It is deterministic and needs no LLM call (see its
-own docstring / ``app.verification``'s "Recency notices" section), so it
-costs nothing to always apply, and -- unlike claim-extraction-gated
-verification -- it is exactly what lets the ``stale_data`` category's cases
-flip offline without an extra recorded model call. ``_EVAL_FIXED_NOW`` is the
-suite's frozen reference instant so replay stays fully deterministic: chosen
-close to the recordings' authored date (mid-2026) so every OTHER category's
-freshly-dated fixtures stay "fresh" under the recency thresholds, while the
-``stale_data`` category's 2014 fixtures are unambiguously stale under any
-sane threshold.
+after the planner turn (see its docstring / ``app.verification``'s "Recency
+notices" section for why it must not wait on the lazy, LLM-gated stage).
+``_EVAL_FIXED_NOW`` is the suite's frozen reference instant, chosen close to
+the recordings' authored date (mid-2026) so every OTHER category's
+freshly-dated fixtures stay "fresh" while ``stale_data``'s 2014 fixtures are
+unambiguously stale.
 """
 
 from __future__ import annotations

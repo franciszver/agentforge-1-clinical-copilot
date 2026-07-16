@@ -188,6 +188,7 @@ from app.quarantine import REDACTED_SENTINEL
 from app.schemas.common import SourceRef
 from app.schemas.planner import ToolName
 from app.schemas.verification import Claim
+from app.tools._common import parse_fhir_datetime
 
 
 class CitationStatus(StrEnum):
@@ -350,34 +351,19 @@ _RECENCY_THRESHOLDS: dict[ToolName, timedelta] = {
     ToolName.GET_ENCOUNTERS: ENCOUNTER_RECENCY_THRESHOLD,
 }
 
-_RECENCY_DATE_FIELD = "date"
-
-
-def _parse_record_date(record: dict[str, Any]) -> datetime | None:
-    """The record's ``date`` field, parsed -- ``None`` if absent or not a
-    parseable ISO datetime string. Fails open on the notice (never raises):
-    a record this checker can't confidently read a date from is silently
-    skipped rather than flagged, since there is nothing unsafe about
-    omitting a caveat this checker cannot compute."""
-    raw = record.get(_RECENCY_DATE_FIELD)
-    if not isinstance(raw, str):
-        return None
-    try:
-        return datetime.fromisoformat(raw)
-    except ValueError:
-        return None
-
 
 def stale_record_date(tool: ToolName, record: dict[str, Any], now: datetime) -> datetime | None:
-    """The record's date if ``tool`` has a recency threshold, the record
-    carries a parseable ``date``, and that date is older than the threshold
-    relative to ``now`` -- else ``None``. Pure and clock-injected: ``now`` is
-    always the caller's own value, never read internally (see module
-    docstring, "The one clock exception")."""
+    """The record's ``date`` field if ``tool`` has a recency threshold, the
+    field parses (``app.tools._common.parse_fhir_datetime`` -- the same
+    ISO-datetime parser ``get_recent_labs``/``get_vitals``/``get_encounters``
+    already use for this exact field), and that date is older than the
+    threshold relative to ``now`` -- else ``None``. Pure and clock-injected:
+    ``now`` is always the caller's own value, never read internally (see
+    module docstring, "The one clock exception")."""
     threshold = _RECENCY_THRESHOLDS.get(tool)
     if threshold is None:
         return None
-    record_date = _parse_record_date(record)
+    record_date = parse_fhir_datetime(record.get("date"))
     if record_date is None:
         return None
     if now - record_date > threshold:
