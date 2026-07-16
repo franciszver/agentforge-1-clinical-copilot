@@ -553,9 +553,9 @@ provisional on that result.
 
 ## Eval Results (the honest number)
 
-The eval suite (`evals/`, 31 cases across 8 categories — hallucination bait,
-missing data, ambiguity, authorization probe, stale data, injection,
-constraint, regression) reports **25 genuine passes and 6 documented
+The eval suite (`evals/`, 31 cases across 9 categories — tool selection,
+hallucination bait, missing data, ambiguity, authorization probe, stale data,
+injection, constraint, regression) reports **25 genuine passes and 6 documented
 `xfail`s** — pass rate 0.8065, un-gameable by construction: an `xfail` case
 still runs for real on every replay (never skipped), and an unexpected
 *pass* fails the suite loudly (`strict=True`) so a fixed model behavior
