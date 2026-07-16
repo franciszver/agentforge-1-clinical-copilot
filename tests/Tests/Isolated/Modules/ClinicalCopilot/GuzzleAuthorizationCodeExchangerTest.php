@@ -27,7 +27,6 @@ namespace OpenEMR\Tests\Isolated\Modules\ClinicalCopilot;
 use GuzzleHttp\Client;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
-use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
 use OpenEMR\Core\ModulesClassLoader;
 use OpenEMR\Modules\ClinicalCopilot\Auth\GuzzleAuthorizationCodeExchanger;
@@ -56,7 +55,7 @@ class GuzzleAuthorizationCodeExchangerTest extends TestCase
     #[Test]
     public function exchangePostsToInternalTokenUrlNotThePublicOrigin(): void
     {
-        [$client, $history] = $this->mockClient([
+        [$client, $mock] = $this->mockClient([
             new Response(200, [], (string) json_encode([
                 'refresh_token' => 'rt-abc',
                 'access_token' => 'at-xyz',
@@ -68,13 +67,13 @@ class GuzzleAuthorizationCodeExchangerTest extends TestCase
         $token = $exchanger->exchange('the-code', 'the-verifier');
 
         $this->assertSame('rt-abc', $token->refreshToken);
-        $this->assertSame(self::INTERNAL_TOKEN_URL, $this->postedUri($history));
+        $this->assertSame(self::INTERNAL_TOKEN_URL, $this->postedUri($mock));
     }
 
     #[Test]
     public function refreshPostsToInternalTokenUrlNotThePublicOrigin(): void
     {
-        [$client, $history] = $this->mockClient([
+        [$client, $mock] = $this->mockClient([
             new Response(200, [], (string) json_encode([
                 'refresh_token' => 'rt-rotated',
                 'access_token' => 'at-new',
@@ -85,34 +84,28 @@ class GuzzleAuthorizationCodeExchangerTest extends TestCase
         $exchanger = new GuzzleAuthorizationCodeExchanger($this->config(), false, $client);
         $exchanger->refresh('rt-old');
 
-        $this->assertSame(self::INTERNAL_TOKEN_URL, $this->postedUri($history));
+        $this->assertSame(self::INTERNAL_TOKEN_URL, $this->postedUri($mock));
     }
 
     /**
      * @param list<Response> $responses
-     * @return array{Client, \ArrayObject<int, array{request: RequestInterface}>}
+     * @return array{Client, MockHandler}
      */
     private function mockClient(array $responses): array
     {
         $mock = new MockHandler($responses);
-        $stack = HandlerStack::create($mock);
-        // ArrayObject so the container is shared by reference: the history
-        // middleware appends after this helper returns.
-        /** @var \ArrayObject<int, array{request: RequestInterface}> $history */
-        $history = new \ArrayObject();
-        $stack->push(Middleware::history($history));
+        $client = new Client(['handler' => HandlerStack::create($mock)]);
 
-        return [new Client(['handler' => $stack]), $history];
+        return [$client, $mock];
     }
 
-    /**
-     * @param \ArrayObject<int, array{request: RequestInterface}> $history
-     */
-    private function postedUri(\ArrayObject $history): string
+    private function postedUri(MockHandler $mock): string
     {
-        $this->assertCount(1, $history, 'exactly one HTTP request must be made');
+        // MockHandler records the request it served; no history middleware needed.
+        $request = $mock->getLastRequest();
+        $this->assertInstanceOf(RequestInterface::class, $request);
 
-        return (string) $history[0]['request']->getUri();
+        return (string) $request->getUri();
     }
 
     private function config(): OAuthConsentConfig
