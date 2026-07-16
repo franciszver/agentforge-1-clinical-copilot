@@ -10,15 +10,29 @@ model call) only runs for cases that actually assert on ``verdict``. A plain
 tool-selection case's recording therefore only has to carry the planner's own
 turns, not an unused claim-extraction call -- judgment call documented in
 ``runner.schema``'s module docstring.
+
+**Recency notices (#153) are NOT lazy** -- unlike verification above, every
+case runs ``app.extraction.apply_recency_notice`` unconditionally, right
+after the planner turn. It is deterministic and needs no LLM call (see its
+own docstring / ``app.verification``'s "Recency notices" section), so it
+costs nothing to always apply, and -- unlike claim-extraction-gated
+verification -- it is exactly what lets the ``stale_data`` category's cases
+flip offline without an extra recorded model call. ``_EVAL_FIXED_NOW`` is the
+suite's frozen reference instant so replay stays fully deterministic: chosen
+close to the recordings' authored date (mid-2026) so every OTHER category's
+freshly-dated fixtures stay "fresh" under the recency thresholds, while the
+``stale_data`` category's 2014 fixtures are unambiguously stale under any
+sane threshold.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 import httpx
 
-from app.extraction import ClaimExtractor, run_verification
+from app.extraction import ClaimExtractor, apply_recency_notice, run_verification
 from app.openemr_client import OpenEmrClient
 from app.planner import Planner, PlannerResult
 from app.rendering import RenderedAnswer
@@ -29,6 +43,10 @@ from runner.schema import EvalCase, VerdictAssertion
 from runner.tool_stub import build_fake_registry
 
 _EVAL_TOKEN = "eval-harness-token"  # noqa: S105 -- not a credential, a fixed placeholder bearer value
+
+# Frozen "now" for the whole offline eval suite (#153) -- see module
+# docstring, "Recency notices are NOT lazy".
+_EVAL_FIXED_NOW = datetime(2026, 7, 15)
 
 
 def _offline_openemr_client() -> OpenEmrClient:
@@ -81,6 +99,7 @@ def run_case(case: EvalCase, ollama_client: OllamaLike) -> CaseResult:
         registry=registry,
     )
     planner_result = planner.run(case.question)
+    planner_result = apply_recency_notice(planner_result, now=_EVAL_FIXED_NOW)
 
     if not needs_verification(case):
         return CaseResult(planner_result=planner_result, verdict_result=None, rendered=None)

@@ -119,16 +119,74 @@ False``; the per-citation ``CitationStatus`` is there for a richer notice
 than a bare "not found in record" if P3.3 wants one (e.g. distinguishing a
 wrong value from an unresolvable citation). This module does not touch
 ``Claim.text`` and inserts no notices -- that's entirely P3.3.
+
+**Recency notices (issue #153) -- an additive, separate concern from
+citation re-validation above, not a change to it.**
+
+The rule (also deterministic, no LLM): the record types the model may
+present as "current" -- labs, vitals, encounters -- carry a ``date`` field.
+``recency_notices`` scans every record actually returned in this turn's tool
+results (``PlannerResult.raw_results``) and, for any record whose ``date``
+is older than that tool's staleness threshold relative to an injected
+``now``, produces a notice string naming the record's date -- so stale data
+is never presented as current without its age.
+
+**Why this scans every returned record, not per-claim citations** (a
+deliberate deviation from the "for a VALID claim" framing this feature was
+scoped under). The natural design would key this off ``ClaimCheckResult``
+the same way citation checking does -- a notice only for records a VALID
+claim actually cites. That is NOT what is implemented below: claim
+extraction is itself an LLM call (``ClaimExtractor.extract_claims``), and
+both the eval harness (``runner.pipeline.needs_verification``) and this
+module's own citation-checking path only reach it for turns whose assertions
+need a verdict. A recency check gated on claim extraction would never fire
+for a turn whose recording has no extraction call -- exactly the #153
+stale-data eval cases (``stale-only-lab``, ``stale-only-vitals``), whose
+recordings only ever exercise ``Planner.run()``. Nor can the eval be made to
+always extract: offline replay (``runner.ollama_replay.ReplayOllamaClient``)
+pops exactly the calls recorded, in order; one unrecorded extra call raises
+``RecordingExhaustedError`` rather than degrading gracefully. Scanning every
+returned record instead needs nothing but ``Planner.run()``'s own output --
+no new LLM call, ever -- so it is exactly as available against an
+already-recorded run as against the live model. This is also a sound
+approximation of the planner's own contract: ``app.planner``'s system prompt
+already requires "Answer only from tool results already returned in this
+conversation", so every record returned this turn is, by construction, in
+scope for that turn's answer.
+
+**The one clock exception.** The sections above advertise "NO model call, NO
+clock, NO I/O" for citation re-validation -- that remains true for
+``check_source_ref``/``check_claim``/``check_claims``, untouched by this
+addition. ``recency_notices`` (and ``stale_record_date``) is the one
+deliberate exception: staleness is inherently relative to "now", so it takes
+``now: datetime`` as an explicit parameter and never reads the wall clock
+itself -- callers own sourcing it (a fixed constant for the eval harness so
+replay stays deterministic; the real wall clock read once at whatever
+production call site applies it). This keeps the function itself pure and
+hermetically testable with a fixed clock.
+
+**Thresholds** (``_RECENCY_THRESHOLDS``, one clinical-cadence rationale
+each): labs and vitals are expected to be re-measured at every visit, or at
+least annually for chronic-disease monitoring (e.g. A1c) -- a reading over a
+year old should not be presented as "current" -- so both get a 365-day
+threshold. Encounter/visit history has a longer natural cadence (e.g. annual
+physicals), so a visit record gets a longer, 730-day (2-year) bar for "not
+current". Tools with no natural "current value" reading (medications,
+allergies, problems, appointments, patient summary) have no threshold and
+are never flagged, regardless of date.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
 from app.quarantine import REDACTED_SENTINEL
 from app.schemas.common import SourceRef
+from app.schemas.planner import ToolName
 from app.schemas.verification import Claim
 
 
@@ -274,3 +332,80 @@ def check_claim(claim: Claim, index: CacheIndex) -> ClaimCheckResult:
 def check_claims(claims: list[Claim], index: CacheIndex) -> list[ClaimCheckResult]:
     """Re-validate a list of claims (the P3.3 entry point)."""
     return [check_claim(claim, index) for claim in claims]
+
+
+# ---------------------------------------------------------------------------
+# Recency notices (#153) -- see module docstring, "Recency notices", for the
+# full rationale (why every returned record, not per-claim citations; the
+# one deliberate clock exception; the threshold rationale).
+# ---------------------------------------------------------------------------
+
+LAB_RECENCY_THRESHOLD = timedelta(days=365)
+VITALS_RECENCY_THRESHOLD = timedelta(days=365)
+ENCOUNTER_RECENCY_THRESHOLD = timedelta(days=730)
+
+_RECENCY_THRESHOLDS: dict[ToolName, timedelta] = {
+    ToolName.GET_RECENT_LABS: LAB_RECENCY_THRESHOLD,
+    ToolName.GET_VITALS: VITALS_RECENCY_THRESHOLD,
+    ToolName.GET_ENCOUNTERS: ENCOUNTER_RECENCY_THRESHOLD,
+}
+
+_RECENCY_DATE_FIELD = "date"
+
+
+def _parse_record_date(record: dict[str, Any]) -> datetime | None:
+    """The record's ``date`` field, parsed -- ``None`` if absent or not a
+    parseable ISO datetime string. Fails open on the notice (never raises):
+    a record this checker can't confidently read a date from is silently
+    skipped rather than flagged, since there is nothing unsafe about
+    omitting a caveat this checker cannot compute."""
+    raw = record.get(_RECENCY_DATE_FIELD)
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def stale_record_date(tool: ToolName, record: dict[str, Any], now: datetime) -> datetime | None:
+    """The record's date if ``tool`` has a recency threshold, the record
+    carries a parseable ``date``, and that date is older than the threshold
+    relative to ``now`` -- else ``None``. Pure and clock-injected: ``now`` is
+    always the caller's own value, never read internally (see module
+    docstring, "The one clock exception")."""
+    threshold = _RECENCY_THRESHOLDS.get(tool)
+    if threshold is None:
+        return None
+    record_date = _parse_record_date(record)
+    if record_date is None:
+        return None
+    if now - record_date > threshold:
+        return record_date
+    return None
+
+
+def _recency_notice_text(tool: ToolName, record_date: datetime) -> str:
+    return (
+        f"Note: the {tool.value} data above is from {record_date.date().isoformat()} "
+        "and may not reflect the patient's current status."
+    )
+
+
+def recency_notices(
+    tools: Sequence[ToolName], raw_results: Sequence[dict[str, Any] | None], now: datetime
+) -> list[str]:
+    """One notice per distinct stale (tool, date) actually returned this
+    turn -- see module docstring, "Why this scans every returned record",
+    for why this is keyed off every record ``Planner.run()`` returned rather
+    than only claim-cited ones. Deduplicated (in first-seen order) so
+    multiple records sharing one stale date (e.g. a systolic + diastolic
+    reading from the same stale vitals check) produce one notice, not one
+    per record."""
+    notices: list[str] = []
+    for tool, result in zip(tools, raw_results):
+        for record in _extract_records(result):
+            record_date = stale_record_date(tool, record, now)
+            if record_date is not None:
+                notices.append(_recency_notice_text(tool, record_date))
+    return list(dict.fromkeys(notices))

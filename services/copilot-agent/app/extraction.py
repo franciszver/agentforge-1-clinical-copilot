@@ -14,6 +14,11 @@ into one ``VerdictResult`` + ``RenderedAnswer`` for the P3.8 SSE frame:
       -> app.verdict.compute_verdict   (+ allergy + interaction folds)
       -> (VerdictResult, RenderedAnswer)
 
+``apply_recency_notice`` (#153) is a separate, deterministic step over the
+same ``PlannerResult`` -- see its own docstring and ``app.verification``'s
+"Recency notices" section for why it is NOT wired into the pipeline above:
+it must not depend on the (LLM, lazily-invoked) extraction stage.
+
 **The security boundary (refined #130).** #130's invariant was originally
 stated as "raw values never reach ANY LLM prompt." That is imprecise, and
 this module resolves it. The REASON quarantine (#130 / P2.9) exists is to
@@ -68,6 +73,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any, Protocol
 
 from app.allergy_check import check_allergy_conflicts
@@ -86,7 +92,7 @@ from app.schemas.tools import (
 )
 from app.schemas.verification import Claim, VerifiedAnswer
 from app.verdict import VerdictResult, compute_verdict
-from app.verification import CacheIndex, check_claims
+from app.verification import CacheIndex, check_claims, recency_notices
 
 _logger = logging.getLogger(__name__)
 
@@ -358,3 +364,23 @@ def run_verification(
         extra={"verdict": verdict_result.verdict.value, "claim_count": len(claim_results)},
     )
     return verdict_result, rendered
+
+
+def apply_recency_notice(result: PlannerResult, *, now: datetime) -> PlannerResult:
+    """Append deterministic recency notices (``app.verification
+    .recency_notices``, #153) to ``result.answer`` for every stale record
+    returned this turn.
+
+    Deliberately independent of ``run_verification``/claim extraction --
+    see ``app.verification``'s module docstring, "Recency notices", for why:
+    this must work from ``Planner.run()``'s output alone (no LLM call), so it
+    fires even for a turn whose recorded run never reaches the extraction
+    stage. Returns ``result`` unchanged (same object) when nothing is stale,
+    so callers can call this unconditionally with no cost on the common
+    case."""
+    tools = [entry.tool for entry in result.trace]
+    notices = recency_notices(tools, result.raw_results, now)
+    if not notices:
+        return result
+    answer = result.answer + "\n\n" + "\n".join(notices)
+    return PlannerResult(answer=answer, trace=result.trace, raw_results=result.raw_results, llm_calls=result.llm_calls)
