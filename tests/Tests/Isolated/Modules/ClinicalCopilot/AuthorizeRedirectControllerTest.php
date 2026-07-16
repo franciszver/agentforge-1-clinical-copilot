@@ -190,6 +190,7 @@ class AuthorizeRedirectControllerTest extends TestCase
             scope: self::SCOPE,
             authorizeUrl: self::AUTHORIZE_URL,
             tokenUrl: self::TOKEN_URL,
+            internalTokenUrl: 'https://openemr/oauth2/default/token',
         );
     }
 

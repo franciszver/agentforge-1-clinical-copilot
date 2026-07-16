@@ -210,6 +210,7 @@ class AgentTokenBrokerTest extends TestCase
             scope: 'openid offline_access',
             authorizeUrl: 'https://localhost:9300/oauth2/default/authorize',
             tokenUrl: 'https://localhost:9300/oauth2/default/token',
+            internalTokenUrl: 'https://openemr/oauth2/default/token',
         );
     }
 

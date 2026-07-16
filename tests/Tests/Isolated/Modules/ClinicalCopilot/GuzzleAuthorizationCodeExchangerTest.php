@@ -90,22 +90,25 @@ class GuzzleAuthorizationCodeExchangerTest extends TestCase
 
     /**
      * @param list<Response> $responses
-     * @return array{Client, list<array{request: RequestInterface}>}
+     * @return array{Client, \ArrayObject<int, array{request: RequestInterface}>}
      */
     private function mockClient(array $responses): array
     {
         $mock = new MockHandler($responses);
         $stack = HandlerStack::create($mock);
-        $history = [];
+        // ArrayObject so the container is shared by reference: the history
+        // middleware appends after this helper returns.
+        /** @var \ArrayObject<int, array{request: RequestInterface}> $history */
+        $history = new \ArrayObject();
         $stack->push(Middleware::history($history));
 
         return [new Client(['handler' => $stack]), $history];
     }
 
     /**
-     * @param list<array{request: RequestInterface}> $history
+     * @param \ArrayObject<int, array{request: RequestInterface}> $history
      */
-    private function postedUri(array $history): string
+    private function postedUri(\ArrayObject $history): string
     {
         $this->assertCount(1, $history, 'exactly one HTTP request must be made');
 
