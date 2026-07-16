@@ -218,10 +218,18 @@ class ClaimExtractor:
         if not catalog:
             return []
 
+        # Message layout matches the structure spike #140 measured at 100%
+        # citation-validity for wide-format tools: the tool-result DATA first,
+        # then the answer as the model's own ASSISTANT turn, then the
+        # decomposition instruction + catalog. Placing the answer *after* the
+        # tool results as an assistant message (rather than before, as user
+        # text) measurably improves value transcription -- a live A/B on the
+        # UC2 meds case flipped a deterministic "Lisinop: 1" value garble back
+        # to a clean "Lisinopril".
         messages = [
             {"role": "system", "content": _EXTRACT_SYSTEM_PROMPT},
-            {"role": "user", "content": f"The answer to decompose:\n{answer}"},
             *_build_tool_result_messages(tools, raw_results),
+            {"role": "assistant", "content": answer},
             {"role": "user", "content": _EXTRACT_INSTRUCTIONS.format(catalog=catalog)},
         ]
         try:
