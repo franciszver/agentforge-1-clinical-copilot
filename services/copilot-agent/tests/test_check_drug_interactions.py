@@ -69,7 +69,7 @@ def test_multi_drug_returns_all_interacting_pairs():
     aspirin+ibuprofen is not a seeded pair."""
     items = _check("warfarin", "aspirin", "ibuprofen")
 
-    pairs = {(item.drug_a, item.drug_b) for item in items}
+    pairs = {canonical_pair(item.drug_a, item.drug_b) for item in items}
     assert pairs == {("aspirin", "warfarin"), ("ibuprofen", "warfarin")}
     assert all(item.severity == InteractionSeverity.MAJOR for item in items)
 
