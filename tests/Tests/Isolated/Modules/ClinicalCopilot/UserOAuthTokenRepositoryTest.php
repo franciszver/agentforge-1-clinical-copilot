@@ -120,7 +120,7 @@ class UserOAuthTokenRepositoryTest extends TestCase
 
         $gateway = $this->createMock(TokenStorageGateway::class);
         $gateway->method('fetchRow')
-            ->willReturnCallback(function (string $sql, array $binds) use (&$capturedSql, &$capturedBinds): ?array {
+            ->willReturnCallback(function (string $sql, array $binds) use (&$capturedSql, &$capturedBinds): array {
                 $capturedSql = $sql;
                 $capturedBinds = $binds;
 
