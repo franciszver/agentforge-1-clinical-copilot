@@ -132,23 +132,6 @@ def test_token_is_refetched_after_expiry(tmp_path):
     assert len(calls) == 2
 
 
-def test_invalidate_forces_a_refetch(tmp_path):
-    creds_path = _write_creds(tmp_path)
-    tokens = iter(["tok-a", "tok-b"])
-    calls: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(request)
-        return httpx.Response(200, json={"access_token": next(tokens), "token_type": "Bearer", "expires_in": 3600})
-
-    bridge = _make_bridge(creds_path, handler=handler)
-
-    assert bridge.get_token() == "tok-a"
-    bridge.invalidate()
-    assert bridge.get_token() == "tok-b"
-    assert len(calls) == 2
-
-
 def test_missing_creds_file_raises_dev_token_error(tmp_path):
     missing = str(tmp_path / "does-not-exist.json")
     bridge = _make_bridge(missing, handler=_token_handler("t"))

@@ -106,27 +106,6 @@ def get_token_validator() -> TokenValidator:
     return _default_token_validator
 
 
-def _bearer_token_or_empty(authorization: str | None) -> str:
-    """Extract the bearer token if present, else "" -- never raises.
-
-    Used only to build the production planner factory's closure. The 401
-    decision for a missing/invalid token is made by ``validator`` in
-    ``chat_endpoint`` (via the raising ``_extract_bearer_token``); that check
-    always runs, and always runs first, so a closure built here with an
-    empty token is never actually invoked on the reject path.
-    """
-    prefix = "Bearer "
-    if authorization and authorization.startswith(prefix):
-        return authorization[len(prefix) :]
-    return ""
-
-
-class DevTokenBridgeProtocol(Protocol):
-    """What the planner factory needs from the token bridge: a real token."""
-
-    def get_token(self) -> str: ...
-
-
 _dev_token_bridge: DevTokenBridge | None = None
 
 
@@ -142,19 +121,15 @@ def get_dev_token_bridge() -> DevTokenBridge:
     return _dev_token_bridge
 
 
-def _default_planner_factory(
-    browser_token: str,
-    dev_token_bridge: DevTokenBridgeProtocol,
-) -> PlannerFactory:
-    """Build the production planner factory for one request.
+def _default_planner_factory(token: str) -> PlannerFactory:
+    """Build the production planner factory bound to one real OpenEMR ``token``.
 
-    The Planner's OpenEMR tool calls use a REAL OpenEMR token obtained
-    server-side by ``dev_token_bridge`` -- NOT the browser's ``DevAgentToken``
-    (``browser_token``), which is only an HMAC identity assertion (finding F4 /
-    issue #126). The real token never reaches the browser. The browser token
-    still gates the request (the token-validator seam) and carries the pid for
-    patient-context binding upstream in ``chat_endpoint``; it is intentionally
-    not threaded into tool calls here.
+    ``token`` is a REAL OpenEMR token obtained server-side by the
+    ``DevTokenBridge`` (finding F4 / issue #126) -- NOT the browser's
+    ``DevAgentToken`` (an HMAC identity assertion), which never reaches tool
+    calls: this factory chain has no access to it at all. The browser token
+    still gates the request and carries the pid for patient-context binding
+    upstream in ``chat_endpoint``.
 
     Identity for ACL is the bridge's configured demo clinician until #124
     (production ``authorization_code``, per-user tokens) lands. A tool call
@@ -167,7 +142,7 @@ def _default_planner_factory(
         return Planner(
             ollama_client=OllamaClient.from_settings(settings),
             openemr_client=OpenEmrClient.from_settings(settings),
-            token=dev_token_bridge.get_token(),
+            token=token,
             patient_id=patient_id,
         )
 
@@ -175,11 +150,16 @@ def _default_planner_factory(
 
 
 def get_planner_factory(
-    authorization: str | None = Header(default=None),
     dev_token_bridge: DevTokenBridge = Depends(get_dev_token_bridge),
 ) -> PlannerFactory:
-    """FastAPI dependency: builds a ``PlannerProtocol`` for a patient_id. Override in tests."""
-    return _default_planner_factory(_bearer_token_or_empty(authorization), dev_token_bridge)
+    """FastAPI dependency: builds a ``PlannerProtocol`` for a patient_id. Override in tests.
+
+    The bridge's (potentially blocking, on a cache miss) token fetch happens
+    here, in a sync dependency FastAPI runs in its worker-thread pool -- not in
+    the ``async`` ``chat_endpoint`` body, so a token refresh never blocks the
+    event loop.
+    """
+    return _default_planner_factory(dev_token_bridge.get_token())
 
 
 UNKNOWN_USER = "unknown"

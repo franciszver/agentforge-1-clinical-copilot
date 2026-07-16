@@ -164,16 +164,6 @@ class DevTokenBridge:
             self._cached = _CachedToken(access_token=token.access_token, expires_at=expires_at)
             return token.access_token
 
-    def invalidate(self) -> None:
-        """Drop the cached token so the next :meth:`get_token` re-fetches.
-
-        Exposed so a caller that observes an ``unauthorized`` tool failure can
-        force a refresh (e.g. after an out-of-band key rotation) rather than
-        wait out the TTL.
-        """
-        with self._lock:
-            self._cached = None
-
     def _fetch(self) -> TokenResponse:
         client_id, client_secret = self._load_creds()
         try:
@@ -205,8 +195,10 @@ class DevTokenBridge:
         except ValueError as exc:
             raise DevTokenError("dev client credentials file is not valid JSON") from exc
 
-        client_id = data.get("client_id") if isinstance(data, dict) else None
-        client_secret = data.get("client_secret") if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            raise DevTokenError("dev client credentials file missing client_id/client_secret")
+        client_id = data.get("client_id")
+        client_secret = data.get("client_secret")
         if not isinstance(client_id, str) or not client_id or not isinstance(client_secret, str) or not client_secret:
             raise DevTokenError("dev client credentials file missing client_id/client_secret")
         return client_id, client_secret
