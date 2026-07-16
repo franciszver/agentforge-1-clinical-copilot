@@ -34,8 +34,8 @@ def register_prod_client(client: httpx.Client, *, settings: Settings) -> ClientC
 
     Uses the canonical browser-facing module callback ``redirect_uri`` and the
     reconciled SMART scope set from ``settings``. ``register_client`` supplies
-    ``application_type: "private"`` (confidential) and the
-    ``authorization_code``/``refresh_token`` grants.
+    ``application_type: "private"`` (confidential); this path passes
+    ``authorization_code`` + ``refresh_token`` grants only (no ``password``).
     """
     return register_client(
         client,
@@ -44,6 +44,9 @@ def register_prod_client(client: httpx.Client, *, settings: Settings) -> ClientC
         client_name=_PROD_CLIENT_NAME,
         redirect_uris=[settings.copilot_prod_client_redirect_uri],
         scope=settings.copilot_prod_client_scopes,
+        # No ``password`` grant for the confidential prod client (see
+        # register_client): only the browser authorization_code + refresh.
+        grant_types=["authorization_code", "refresh_token"],
     )
 
 

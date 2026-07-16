@@ -90,13 +90,24 @@ class Settings(BaseSettings):
         "https://localhost:9300/interface/modules/custom_modules/"
         "oe-module-clinical-copilot/public/oauth-callback.php"
     )
-    # SMART-on-FHIR scopes for the production client, reconciled against
-    # OpenEMR's ServerScopeListEntity::getAllSupportedScopesList() (OpenEMR
-    # silently strips unrecognized scopes). ``user/*.read`` is DROPPED -- OpenEMR
-    # has no wildcard scope; explicit per-resource read scopes are requested at
-    # authorize time in Phase 2 (mirroring copilot_dev_token_scopes above).
+    # SMART-on-FHIR scopes for the production client. Every scope MUST exist in
+    # OpenEMR's ServerScopeListEntity::getAllSupportedScopesList() -- dynamic
+    # registration REJECTS the whole request with ``invalid_scope`` on the first
+    # unrecognized scope (AuthorizationController::validateScopesAgainstServer-
+    # ApprovedScopes). ``user/*.read`` is NOT used -- OpenEMR has no wildcard
+    # scope entry, so it would be rejected.
+    #
+    # The per-resource read scopes are registered here (not deferred to authorize
+    # time): ScopeRepository::finalizeScopes only lets a token carry scopes the
+    # client REGISTERED with, so an unregistered read scope requested at grant
+    # time is silently dropped -> tool calls would have api:oemr/api:fhir but no
+    # resource-read authorization. These mirror the known-accepted
+    # copilot_dev_token_scopes plus the SMART-launch scopes.
     copilot_prod_client_scopes: str = (
-        "openid offline_access launch launch/patient api:oemr api:fhir fhirUser"
+        "openid offline_access launch launch/patient api:oemr api:fhir fhirUser "
+        "user/patient.read user/medication.read user/allergy.read "
+        "user/medical_problem.read user/encounter.read user/appointment.read "
+        "user/vital.read user/procedure.read user/Observation.read"
     )
     # Path (inside the agent container) for the production client credentials
     # written by the prod registration CLI. Distinct file from the dev bridge's.

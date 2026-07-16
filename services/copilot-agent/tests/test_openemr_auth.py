@@ -156,11 +156,17 @@ _CANONICAL_REDIRECT_URI = (
     "https://localhost:9300/interface/modules/custom_modules/"
     "oe-module-clinical-copilot/public/oauth-callback.php"
 )
-# SMART scopes reconciled against OpenEMR's
-# ServerScopeListEntity::getAllSupportedScopesList() -- ``user/*.read`` is
-# dropped (OpenEMR has no wildcard scope and silently strips it).
+# SMART-launch scopes + per-resource read scopes, every one confirmed present
+# in OpenEMR's ServerScopeListEntity::getAllSupportedScopesList() (registration
+# REJECTS unknown scopes with invalid_scope). The read scopes must be REGISTERED
+# (not deferred to authorize time) -- ScopeRepository::finalizeScopes only lets
+# a token carry scopes the client registered with. ``user/*.read`` is absent:
+# OpenEMR has no wildcard entry.
 _RECONCILED_PROD_SCOPES = (
-    "openid offline_access launch launch/patient api:oemr api:fhir fhirUser"
+    "openid offline_access launch launch/patient api:oemr api:fhir fhirUser "
+    "user/patient.read user/medication.read user/allergy.read "
+    "user/medical_problem.read user/encounter.read user/appointment.read "
+    "user/vital.read user/procedure.read user/Observation.read"
 )
 
 
@@ -186,10 +192,13 @@ def test_register_prod_client_sends_authz_code_payload():
     assert body["application_type"] == "private"
     assert "authorization_code" in body["grant_types"]
     assert "refresh_token" in body["grant_types"]
+    # Confidential prod client must NOT accept the resource-owner password grant.
+    assert "password" not in body["grant_types"]
     assert body["response_types"] == ["code"]
     assert body["redirect_uris"] == [_CANONICAL_REDIRECT_URI]
     assert body["scope"] == _RECONCILED_PROD_SCOPES
-    # OpenEMR silently strips wildcard scopes -- none must be requested.
+    # OpenEMR has no wildcard scope entry -- none must be requested (would be
+    # rejected with invalid_scope at registration).
     assert "user/*" not in str(body["scope"])
     assert isinstance(creds, ClientCredentials)
     assert creds.client_id == "pc-1"

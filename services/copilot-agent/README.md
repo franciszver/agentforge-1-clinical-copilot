@@ -55,7 +55,10 @@ bash scripts/register-copilot-prod-client.sh
 ```
 
 This posts a confidential (`application_type: private`) registration with the
-`authorization_code` + `refresh_token` grants and:
+`authorization_code` + `refresh_token` grants **only** (deliberately no
+`password` grant — a confidential prod client must not accept the resource-owner
+password grant, or a leaked `client_secret` plus any clinician credential could
+mint tokens directly, bypassing the authorization_code + consent flow) and:
 
 - **Canonical `redirect_uri`** — the single source of truth in
   `app/config.py` (`copilot_prod_client_redirect_uri`):
@@ -65,16 +68,24 @@ This posts a confidential (`application_type: private`) registration with the
   `openemr` docker alias used for the server-side registration call. Phase 2's
   authorize/callback must match this URL byte-for-byte — OpenEMR enforces exact
   `redirect_uri` matching.
-- **Reconciled SMART scopes** (`copilot_prod_client_scopes`):
-  `openid offline_access launch launch/patient api:oemr api:fhir fhirUser`.
-  Reconciled against OpenEMR's
-  `ServerScopeListEntity::getAllSupportedScopesList()`, which enumerates only
-  literal scopes and **silently strips** anything unrecognized. `user/*.read`
-  (from the SMART starting set) is **dropped** — OpenEMR has no wildcard scope,
-  so the `user/*` lookup key has no validator entry and is discarded with no
-  error to the client. Explicit per-resource read scopes (as in
-  `copilot_dev_token_scopes`) are requested at **authorize time in Phase 2**,
-  not baked into registration.
+- **SMART scopes** (`copilot_prod_client_scopes`): the SMART-launch scopes
+  (`openid offline_access launch launch/patient api:oemr api:fhir fhirUser`)
+  **plus** the per-resource read scopes (`user/patient.read`,
+  `user/medication.read`, `user/allergy.read`, `user/medical_problem.read`,
+  `user/encounter.read`, `user/appointment.read`, `user/vital.read`,
+  `user/procedure.read`, `user/Observation.read` — mirroring the
+  known-accepted `copilot_dev_token_scopes`). Every scope exists in OpenEMR's
+  `ServerScopeListEntity::getAllSupportedScopesList()`; dynamic registration
+  **rejects the whole request with `invalid_scope`** on the first unrecognized
+  scope (`AuthorizationController::validateScopesAgainstServerApprovedScopes`),
+  so an unknown scope breaks registration outright rather than being silently
+  dropped. `user/*.read` is **not** used — OpenEMR has no wildcard scope entry.
+  The read scopes are **registered here, not deferred to authorize time**:
+  `ScopeRepository::finalizeScopes` only lets a token carry scopes the client
+  registered with, so an unregistered read scope requested at grant time is
+  silently dropped from the final token — the client would get
+  `api:oemr`/`api:fhir` but no resource-read authorization, and tool calls
+  would fail.
 
 **PKCE (S256):** nothing is declared at registration. PKCE is a redirect-time
 concern — the `code_challenge` travels on the Phase 2 authorize request, not in

@@ -30,7 +30,11 @@ def write_creds_securely(path: str, data: dict[str, str]) -> None:
     if not parent.exists():
         parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # O_NOFOLLOW closes the symlink-follow window on the creds path (a planted
+    # symlink could otherwise redirect the write). It exists on Linux/CI;
+    # getattr keeps Windows (which lacks it) a no-op.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(json.dumps(data))
     os.chmod(path, 0o600)
