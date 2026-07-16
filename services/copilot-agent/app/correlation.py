@@ -131,7 +131,7 @@ class CorrelationIdMiddleware:
             await self.app(scope, receive, send_wrapper)
 
 
-_STDLIB_RECORD_ATTRS = frozenset(vars(logging.LogRecord("", 0, "", 0, "", (), None)).keys())
+_STDLIB_RECORD_ATTRS = frozenset(logging.makeLogRecord({}).__dict__.keys())
 
 
 class JsonFormatter(logging.Formatter):

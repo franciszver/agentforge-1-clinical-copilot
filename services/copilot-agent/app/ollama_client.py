@@ -152,15 +152,16 @@ class OllamaClient:
             response = self._post_chat(body)
             content, tokens_in, tokens_out = self._assemble_stream(response)
         except OllamaError as exc:
+            end_ts = time.time()
             self.call_stats.append(
-                LlmCallStats(model=self._model, start_ts=start_ts, end_ts=time.time(), ok=False, tokens_in=None, tokens_out=None)
+                LlmCallStats(model=self._model, start_ts=start_ts, end_ts=end_ts, ok=False, tokens_in=None, tokens_out=None)
             )
             _logger.warning(
                 "ollama chat call failed",
                 extra={
                     "model": self._model,
                     "error_type": type(exc).__name__,
-                    "duration_ms": round((time.time() - start_ts) * 1000, 1),
+                    "duration_ms": round((end_ts - start_ts) * 1000, 1),
                 },
             )
             raise
@@ -204,8 +205,9 @@ class OllamaClient:
             try:
                 response = self._post_chat(body)
             except OllamaError as exc:
+                end_ts = time.time()
                 self.call_stats.append(
-                    LlmCallStats(model=self._model, start_ts=start_ts, end_ts=time.time(), ok=False, tokens_in=None, tokens_out=None)
+                    LlmCallStats(model=self._model, start_ts=start_ts, end_ts=end_ts, ok=False, tokens_in=None, tokens_out=None)
                 )
                 _logger.warning(
                     "ollama extract call failed",
@@ -214,7 +216,7 @@ class OllamaClient:
                         "schema": schema.__name__,
                         "attempt": attempt,
                         "error_type": type(exc).__name__,
-                        "duration_ms": round((time.time() - start_ts) * 1000, 1),
+                        "duration_ms": round((end_ts - start_ts) * 1000, 1),
                     },
                 )
                 raise
@@ -225,8 +227,9 @@ class OllamaClient:
                 payload = json.loads(content)
                 result = schema.model_validate(payload)
             except (OllamaError, ValueError, ValidationError) as exc:
+                end_ts = time.time()
                 self.call_stats.append(
-                    LlmCallStats(model=self._model, start_ts=start_ts, end_ts=time.time(), ok=False, tokens_in=tokens_in, tokens_out=tokens_out)
+                    LlmCallStats(model=self._model, start_ts=start_ts, end_ts=end_ts, ok=False, tokens_in=tokens_in, tokens_out=tokens_out)
                 )
                 will_retry = attempt < self._max_retries
                 _logger.warning(
@@ -239,7 +242,7 @@ class OllamaClient:
                         "attempt": attempt,
                         "max_retries": self._max_retries,
                         "error_type": type(exc).__name__,
-                        "duration_ms": round((time.time() - start_ts) * 1000, 1),
+                        "duration_ms": round((end_ts - start_ts) * 1000, 1),
                     },
                 )
                 continue

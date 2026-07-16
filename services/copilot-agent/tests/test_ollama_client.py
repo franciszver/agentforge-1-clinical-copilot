@@ -17,6 +17,7 @@ import pytest
 from pydantic import BaseModel
 
 from app.config import Settings
+from app.correlation import _STDLIB_RECORD_ATTRS
 from app.ollama_client import OllamaClient, OllamaError
 
 
@@ -405,7 +406,7 @@ def _all_log_text(records: list[logging.LogRecord]) -> str:
     for record in records:
         parts.append(record.getMessage())
         for key, value in vars(record).items():
-            if key not in logging.LogRecord("", 0, "", 0, "", (), None).__dict__:
+            if key not in _STDLIB_RECORD_ATTRS:
                 parts.append(str(value))
     return " ".join(parts)
 
