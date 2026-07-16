@@ -24,7 +24,6 @@ declare(strict_types=1);
 namespace OpenEMR\Modules\ClinicalCopilot\Auth;
 
 use GuzzleHttp\Client;
-use GuzzleHttp\Exception\GuzzleException;
 
 final class GuzzleAuthorizationCodeExchanger implements AuthorizationCodeExchanger
 {
@@ -39,6 +38,12 @@ final class GuzzleAuthorizationCodeExchanger implements AuthorizationCodeExchang
 
     public function exchange(string $code, string $codeVerifier): OAuthTokenResponse
     {
+        // Boundary: EVERY failure of the exchange -- Guzzle transport errors, a
+        // non-200/malformed response, or any other throwable (incl. \Error) --
+        // is funneled into OAuthExchangeException so the controller's single
+        // catch handles them uniformly as a generic, log-safe fail. Generic
+        // messages only; the original is chained (never embedded) so creds/URLs
+        // in an underlying message cannot leak.
         try {
             $response = $this->client->post($this->config->tokenUrl, [
                 'form_params' => [
@@ -53,29 +58,30 @@ final class GuzzleAuthorizationCodeExchanger implements AuthorizationCodeExchang
                 'verify' => $this->verifySsl,
                 'http_errors' => false,
             ]);
-        } catch (GuzzleException $e) {
-            // Generic message only -- never embed the original (may carry the URL/creds).
-            throw new OAuthExchangeException('Token endpoint request failed', 0, $e);
+
+            if ($response->getStatusCode() !== 200) {
+                throw new OAuthExchangeException('Token endpoint returned status ' . $response->getStatusCode());
+            }
+
+            $decoded = json_decode((string) $response->getBody(), true);
+            if (!is_array($decoded)) {
+                throw new OAuthExchangeException('Token endpoint returned a non-JSON body');
+            }
+
+            $refreshToken = $decoded['refresh_token'] ?? null;
+            if (!is_string($refreshToken) || $refreshToken === '') {
+                throw new OAuthExchangeException('Token endpoint response is missing a refresh_token');
+            }
+
+            $accessTokenRaw = $decoded['access_token'] ?? null;
+            $accessToken = is_string($accessTokenRaw) && $accessTokenRaw !== '' ? $accessTokenRaw : null;
+
+            return new OAuthTokenResponse($refreshToken, $accessToken, $this->expiryFrom($decoded));
+        } catch (OAuthExchangeException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            throw new OAuthExchangeException('Token exchange failed', 0, $e);
         }
-
-        if ($response->getStatusCode() !== 200) {
-            throw new OAuthExchangeException('Token endpoint returned status ' . $response->getStatusCode());
-        }
-
-        $decoded = json_decode((string) $response->getBody(), true);
-        if (!is_array($decoded)) {
-            throw new OAuthExchangeException('Token endpoint returned a non-JSON body');
-        }
-
-        $refreshToken = $decoded['refresh_token'] ?? null;
-        if (!is_string($refreshToken) || $refreshToken === '') {
-            throw new OAuthExchangeException('Token endpoint response is missing a refresh_token');
-        }
-
-        $accessTokenRaw = $decoded['access_token'] ?? null;
-        $accessToken = is_string($accessTokenRaw) && $accessTokenRaw !== '' ? $accessTokenRaw : null;
-
-        return new OAuthTokenResponse($refreshToken, $accessToken, $this->expiryFrom($decoded));
     }
 
     /**

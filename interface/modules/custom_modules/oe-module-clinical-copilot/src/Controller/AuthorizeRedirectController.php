@@ -105,6 +105,9 @@ final class AuthorizeRedirectController
             'client_id' => $this->config->clientId,
             'redirect_uri' => $this->config->redirectUri,
             'scope' => $this->config->scope,
+            // collectCsrfToken throws if the session has no CSRF key; unreachable
+            // here (handleRequest's auth gate guarantees an authenticated session,
+            // which always has one) and, if it ever were, the caller's catch fails safe.
             'state' => CsrfUtils::collectCsrfToken($session, OAuthConsentSession::STATE_SUBJECT),
             'code_challenge' => $pkce->challenge,
             'code_challenge_method' => 'S256',

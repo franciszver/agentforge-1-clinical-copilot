@@ -82,70 +82,76 @@ final class OAuthCallbackController
             return;
         }
 
-        // (3) State CSRF: constant-time comparison against the session key, before
-        // any code is exchanged. Rejects missing, empty, or forged state.
-        if (
-            !is_string($this->state)
-            || $this->state === ''
-            || !CsrfUtils::verifyCsrfToken($this->state, $session, OAuthConsentSession::STATE_SUBJECT)
-        ) {
-            $this->fail(403, 'Authorization could not be verified. Please try again.');
-            return;
-        }
-
-        if (!is_string($this->code) || $this->code === '') {
-            $this->fail(400, 'Authorization could not be completed. Please try again.');
-            return;
-        }
-
-        // (4) PKCE verifier must exist server-side; it is never taken from the request.
-        $verifier = $session->get(OAuthConsentSession::CODE_VERIFIER_KEY);
-        if (!is_string($verifier) || $verifier === '') {
-            $this->fail(400, 'Your authorization session expired. Please try again.');
-            return;
-        }
-
-        // (5) Refuse to store long-lived refresh tokens if the site would persist
-        // them in plaintext. This is checked BEFORE the exchange so we never even
-        // obtain a token we cannot store safely.
-        if (!$this->databaseEncryptionEnabled) {
-            ServiceContainer::getLogger()->error(
-                'Co-Pilot OAuth: refusing to store tokens because database_encryption is disabled',
-                ['user' => $authUserId],
-            );
-            $this->fail(500, 'Secure token storage is not configured. Contact your administrator.');
-            return;
-        }
-
-        // (6) Exchange, fail-safe.
+        // From here the one-time PKCE verifier is treated as consumed: it is burned
+        // on EVERY terminal path (success or failure) via the finally below, so a
+        // failed, forged, or replayed callback can never reuse it. The burn is a
+        // no-op when no verifier is present.
         try {
-            $token = $this->exchanger->exchange($this->code, $verifier);
-        } catch (OAuthExchangeException $e) {
-            ServiceContainer::getLogger()->error('Co-Pilot OAuth token exchange failed', ['exception' => $e]);
-            $this->fail(400, 'Authorization could not be completed. Please try again.');
-            return;
+            // (3) State CSRF: constant-time comparison against the session key, before
+            // any code is exchanged. Rejects missing, empty, or forged state.
+            if (
+                !is_string($this->state)
+                || $this->state === ''
+                || !CsrfUtils::verifyCsrfToken($this->state, $session, OAuthConsentSession::STATE_SUBJECT)
+            ) {
+                $this->fail(403, 'Authorization could not be verified. Please try again.');
+                return;
+            }
+
+            if (!is_string($this->code) || $this->code === '') {
+                $this->fail(400, 'Authorization could not be completed. Please try again.');
+                return;
+            }
+
+            // (4) PKCE verifier must exist server-side; it is never taken from the request.
+            $verifier = $session->get(OAuthConsentSession::CODE_VERIFIER_KEY);
+            if (!is_string($verifier) || $verifier === '') {
+                $this->fail(400, 'Your authorization session expired. Please try again.');
+                return;
+            }
+
+            // (5) Refuse to store long-lived refresh tokens if the site would persist
+            // them in plaintext. This is checked BEFORE the exchange so we never even
+            // obtain a token we cannot store safely.
+            if (!$this->databaseEncryptionEnabled) {
+                ServiceContainer::getLogger()->error(
+                    'Co-Pilot OAuth: refusing to store tokens because database_encryption is disabled',
+                    ['user' => $authUserId],
+                );
+                $this->fail(500, 'Secure token storage is not configured. Contact your administrator.');
+                return;
+            }
+
+            // (6) Exchange, fail-safe.
+            try {
+                $token = $this->exchanger->exchange($this->code, $verifier);
+            } catch (OAuthExchangeException $e) {
+                ServiceContainer::getLogger()->error('Co-Pilot OAuth token exchange failed', ['exception' => $e]);
+                $this->fail(400, 'Authorization could not be completed. Please try again.');
+                return;
+            }
+
+            // (7) Empty-refresh-token guard: without a refresh token the record is useless.
+            if ($token->refreshToken === '') {
+                ServiceContainer::getLogger()->error('Co-Pilot OAuth: exchange returned an empty refresh token', ['user' => $authUserId]);
+                $this->fail(400, 'Authorization could not be completed. Please try again.');
+                return;
+            }
+
+            // (8) Store encrypted (atomic replace = refresh-token rotation).
+            try {
+                $this->store($authUserId, $token);
+            } catch (\RuntimeException | CryptoGenException $e) {
+                ServiceContainer::getLogger()->error('Co-Pilot OAuth token storage failed', ['exception' => $e]);
+                $this->fail(500, 'Could not save authorization. Please try again.');
+                return;
+            }
+
+            $this->success();
+        } finally {
+            // Burn the one-time verifier on all outcomes (writable-session helper).
+            SessionUtil::unsetSession(OAuthConsentSession::CODE_VERIFIER_KEY);
         }
-
-        // (7) Empty-refresh-token guard: without a refresh token the record is useless.
-        if ($token->refreshToken === '') {
-            ServiceContainer::getLogger()->error('Co-Pilot OAuth: exchange returned an empty refresh token', ['user' => $authUserId]);
-            $this->fail(400, 'Authorization could not be completed. Please try again.');
-            return;
-        }
-
-        // (8) Store encrypted (atomic replace = refresh-token rotation), then burn the verifier.
-        try {
-            $this->store($authUserId, $token);
-        } catch (\RuntimeException | CryptoGenException $e) {
-            ServiceContainer::getLogger()->error('Co-Pilot OAuth token storage failed', ['exception' => $e]);
-            $this->fail(500, 'Could not save authorization. Please try again.');
-            return;
-        }
-
-        // Burn the one-time verifier via the writable-session helper.
-        SessionUtil::unsetSession(OAuthConsentSession::CODE_VERIFIER_KEY);
-
-        $this->success();
     }
 
     private function store(int $authUserId, OAuthTokenResponse $token): void

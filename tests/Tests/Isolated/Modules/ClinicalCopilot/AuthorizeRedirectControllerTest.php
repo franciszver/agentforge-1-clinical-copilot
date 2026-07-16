@@ -69,10 +69,27 @@ class AuthorizeRedirectControllerTest extends TestCase
     #[Test]
     public function redirectUriConstantMatchesPhase1Canonical(): void
     {
-        // Locks the module constant against Phase 1's config.py value. OpenEMR
-        // enforces exact redirect_uri matching -- a single byte of drift breaks
-        // both the authorize request and the token exchange.
-        $this->assertSame(self::CANONICAL_REDIRECT_URI, OAuthConsentConfig::CANONICAL_REDIRECT_URI);
+        // Lock the module constant against Phase 1's config.py value byte-for-byte
+        // by reading config.py itself -- OpenEMR enforces exact redirect_uri
+        // matching across the PHP and Python sides, and reading the real source of
+        // truth is both meaningful and non-tautological (a self-comparison of two
+        // known literals is a tautology PHPStan rejects).
+        $projectDir = dirname(__DIR__, 5);
+        $configPy = (string) file_get_contents($projectDir . '/services/copilot-agent/app/config.py');
+        $this->assertNotSame('', $configPy, 'Phase 1 config.py must be readable');
+
+        $matched = preg_match(
+            '/copilot_prod_client_redirect_uri:\s*str\s*=\s*\(([^)]*)\)/s',
+            $configPy,
+            $block
+        );
+        $this->assertSame(1, $matched, 'config.py must define copilot_prod_client_redirect_uri');
+
+        // The value spans adjacent "..." string literals; concatenate them.
+        preg_match_all('/"([^"]*)"/', $block[1], $pieces);
+        $expected = implode('', $pieces[1]);
+
+        $this->assertSame($expected, OAuthConsentConfig::CANONICAL_REDIRECT_URI);
     }
 
     #[Test]
