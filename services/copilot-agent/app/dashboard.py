@@ -158,9 +158,10 @@ _STYLE = """\
 
 
 def _fmt_alert_value(alert: Alert) -> tuple[str, str]:
-    """Format an alert's current/threshold values with the right unit --
-    latency alerts in ms, rate alerts as a percentage."""
-    fmt = _fmt_ms if alert.metric == "p95 latency" else _fmt_rate
+    """Format an alert's current/threshold values per its ``unit`` (set once
+    where the alert is constructed in ``app.dashboard_alerts``) -- ms for
+    latency, percentage for a rate."""
+    fmt = _fmt_ms if alert.unit == "ms" else _fmt_rate
     return fmt(alert.current_value), fmt(alert.threshold)
 
 

@@ -225,7 +225,7 @@ def test_custom_thresholds_override_defaults() -> None:
 
 
 def test_alert_is_frozen() -> None:
-    alert = Alert(metric="x", current_value=1.0, threshold=0.5, explanation="y")
+    alert = Alert(metric="x", current_value=1.0, threshold=0.5, explanation="y", unit="rate")
     try:
         alert.metric = "z"  # type: ignore[misc]
         raised = False

@@ -32,19 +32,23 @@ as already-alerting.
 fires an alert -- there is nothing to alert ON. This mirrors the dashboard's
 own "N/A" rendering: no data is not the same as good data.
 
-**Derived rates are rounded to 9 decimal places** before comparison. Both
-derived rates involve a floating-point subtraction/division
-(``1 - verification_pass_rate``, ``retry_count / tool_call_count``) that can
-land a hair off an exact decimal boundary purely from binary float
-representation (e.g. ``1.0 - 0.7 == 0.30000000000000004``, not ``0.3``).
-9 decimal places is far finer than any rate derived from realistic span
-counts needs, so this only removes float dust -- it never masks a real
-difference.
+**All four values are rounded to 9 decimal places** before comparison (and
+that rounded value is what ``Alert.current_value`` reports). Every one of
+them is itself the result of floating-point division or subtraction
+upstream (in ``dashboard_metrics.py`` or in this module's two derived
+rates), which can land a hair off an exact decimal boundary purely from
+binary float representation (e.g. ``1.0 - 0.7 == 0.30000000000000004``, not
+``0.3``). Rounding uniformly, rather than only on the two locally-derived
+rates, avoids the same flakiness resurfacing for p95 latency or error rate.
+9 decimal places is far finer than any rate the dashboard renders (1 decimal
+place) needs, so this only removes float dust -- it never masks a real
+difference or a value a clinician would notice.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from app.dashboard_metrics import DashboardMetrics
 
@@ -78,12 +82,15 @@ DEFAULT_THRESHOLDS = AlertThresholds()
 @dataclass(frozen=True)
 class Alert:
     """One active alert. ``explanation`` is a hardcoded, non-PHI paragraph --
-    never built from request data -- safe to render verbatim."""
+    never built from request data -- safe to render verbatim. ``unit`` tells
+    the renderer how to format ``current_value``/``threshold`` (milliseconds
+    vs. a percentage) without re-deriving it from ``metric``'s display text."""
 
     metric: str
     current_value: float
     threshold: float
     explanation: str
+    unit: Literal["ms", "rate"]
 
 
 _P95_LATENCY_EXPLANATION = (
@@ -131,52 +138,51 @@ def evaluate_alerts(
     verification-fail rate. See module docstring for boundary (``>``, not
     ``>=``) and ``None`` handling.
     """
-    alerts: list[Alert] = []
-
-    if metrics.p95_latency_ms is not None and metrics.p95_latency_ms > thresholds.p95_latency_ms:
-        alerts.append(
-            Alert(
-                metric="p95 latency",
-                current_value=metrics.p95_latency_ms,
-                threshold=thresholds.p95_latency_ms,
-                explanation=_P95_LATENCY_EXPLANATION,
-            )
-        )
-
-    if metrics.error_rate is not None and metrics.error_rate > thresholds.error_rate:
-        alerts.append(
-            Alert(
-                metric="error rate",
-                current_value=metrics.error_rate,
-                threshold=thresholds.error_rate,
-                explanation=_ERROR_RATE_EXPLANATION,
-            )
-        )
-
     tool_failure_rate = (
-        round(metrics.retry_count / metrics.tool_call_count, 9) if metrics.tool_call_count > 0 else None
+        metrics.retry_count / metrics.tool_call_count if metrics.tool_call_count > 0 else None
     )
-    if tool_failure_rate is not None and tool_failure_rate > thresholds.tool_failure_rate:
-        alerts.append(
-            Alert(
-                metric="tool-failure rate",
-                current_value=tool_failure_rate,
-                threshold=thresholds.tool_failure_rate,
-                explanation=_TOOL_FAILURE_RATE_EXPLANATION,
-            )
-        )
-
     verification_fail_rate = (
-        round(1 - metrics.verification_pass_rate, 9) if metrics.verification_pass_rate is not None else None
+        1 - metrics.verification_pass_rate if metrics.verification_pass_rate is not None else None
     )
-    if verification_fail_rate is not None and verification_fail_rate > thresholds.verification_fail_rate:
-        alerts.append(
-            Alert(
-                metric="verification-fail rate",
-                current_value=verification_fail_rate,
-                threshold=thresholds.verification_fail_rate,
-                explanation=_VERIFICATION_FAIL_RATE_EXPLANATION,
-            )
-        )
 
+    # (metric name, current value, threshold, explanation, unit) -- one row
+    # per alert, evaluated in this fixed order. All four values get the same
+    # 9-decimal rounding before comparison (see module docstring): direct DTO
+    # reads (p95, error rate) carry the same float-division risk as the two
+    # derived rates, so the rounding is applied uniformly rather than only
+    # where a boundary test happened to notice it.
+    candidates: list[tuple[str, float | None, float, str, Literal["ms", "rate"]]] = [
+        ("p95 latency", metrics.p95_latency_ms, thresholds.p95_latency_ms, _P95_LATENCY_EXPLANATION, "ms"),
+        ("error rate", metrics.error_rate, thresholds.error_rate, _ERROR_RATE_EXPLANATION, "rate"),
+        (
+            "tool-failure rate",
+            tool_failure_rate,
+            thresholds.tool_failure_rate,
+            _TOOL_FAILURE_RATE_EXPLANATION,
+            "rate",
+        ),
+        (
+            "verification-fail rate",
+            verification_fail_rate,
+            thresholds.verification_fail_rate,
+            _VERIFICATION_FAIL_RATE_EXPLANATION,
+            "rate",
+        ),
+    ]
+
+    alerts: list[Alert] = []
+    for metric, value, threshold, explanation, unit in candidates:
+        if value is None:
+            continue
+        rounded_value = round(value, 9)
+        if rounded_value > threshold:
+            alerts.append(
+                Alert(
+                    metric=metric,
+                    current_value=rounded_value,
+                    threshold=threshold,
+                    explanation=explanation,
+                    unit=unit,
+                )
+            )
     return alerts
