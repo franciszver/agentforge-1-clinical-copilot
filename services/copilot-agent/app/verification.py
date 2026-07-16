@@ -3,11 +3,12 @@
 Every factual ``Claim`` produced upstream (``app.schemas.verification``)
 carries >=1 ``SourceRef`` pointing at a tool result already in this
 conversation's cache. This module re-validates each citation independently,
-with NO model call, NO clock, NO I/O -- purely a lookup + comparison over
-``list[app.planner.ToolCallTrace]``. P3.3 (not implemented here) consumes the
-per-claim / per-citation result this module returns to decide what to strip
-from the final answer; P3.7 (also not here) rolls per-claim results into the
-whole-answer verdict.
+with NO model call, NO clock, NO I/O -- purely a lookup + comparison over the
+conversation's RAW tool results (``PlannerResult.raw_results``, the
+verifier-only channel -- see decision 3). P3.3 (not implemented here) consumes
+the per-claim / per-citation result this module returns to decide what to
+strip from the final answer; P3.7 (also not here) rolls per-claim results into
+the whole-answer verdict.
 
 **Design decisions (P3.2), and why**
 
@@ -27,41 +28,53 @@ whole-answer verdict.
    (``NO_ASSERTED_VALUE``) rather than being treated as a bare
    presence-check -- see ``check_source_ref``.
 
-2. **Identity plumbing.** ``ToolCallTrace`` (``app.planner``) carries no
+2. **Identity plumbing.** ``PlannerResult.raw_results`` entries carry no
    ``tool_call_id`` and tool-output records carry no ``record_id`` /
    ``uuid`` (checked: none of ``app.schemas.tools``'s ``*Item`` models expose
-   one, and neither does the REST/FHIR tool layer). ``CacheIndex.from_trace``
-   therefore assigns both, positionally, when it builds the index for one
-   conversation's trace:
-     - ``tool_call_id`` = ``f"call_{i}"`` for the trace's 0-based order. A
-       call that errored (``ToolCallTrace.result is None``) still gets an id
-       (so a ref to it resolves the *call* but finds zero records, i.e.
-       ``UNKNOWN_RECORD`` -- distinct from a ref to a call that was never
-       made at all, ``UNKNOWN_TOOL_CALL``).
+   one, and neither does the REST/FHIR tool layer).
+   ``CacheIndex.from_raw_results`` therefore assigns both, positionally, when
+   it builds the index for one conversation:
+     - ``tool_call_id`` = ``f"call_{i}"`` for the 0-based order of
+       ``raw_results`` (which is aligned 1:1 with the trace -- see decision
+       3). An entry that produced no output (``None`` -- a binding violation
+       or API error) still gets an id, so a ref to it resolves the *call*
+       but finds zero records (``UNKNOWN_RECORD``) -- distinct from a ref to
+       a call that was never made at all (``UNKNOWN_TOOL_CALL``).
      - ``record_id`` = the record's 0-based position (as a string) within
        the call's result: each entry of an ``items`` list for list-shaped
        tool outputs (medications, labs, ...), or ``"0"`` for a single-object
        output (``get_patient_summary``) -- treated as a one-record result so
        the scheme stays uniform. This is a positional convention, not a
-       durable identity; it is stable only within one conversation's trace
-       (fine, since the cache itself only lives for one conversation).
+       durable identity; it is stable only within one conversation (fine,
+       since the cache itself only lives for one conversation).
 
-3. **A cached field's value can be the quarantine redaction sentinel.**
-   ``ToolCallTrace.result`` is *post-quarantine* (``app.quarantine`` -- P2.9):
-   every non-empty free-text string field (medication ``name``/``dose``,
-   problem ``title``, lab ``test_name``/``value``, ...) is replaced with
-   ``app.quarantine.REDACTED_SENTINEL`` in the cached structured skeleton;
-   only enums, numbers, booleans, and dates/times survive verbatim. A
-   citation whose resolved field is the sentinel cannot be re-validated
-   against the *cached* value (the real value only exists, blurred, inside
-   the LLM-cleaned prose summary this checker deliberately does not consult
-   -- see decision 1) -- so it fails closed with ``REDACTED_FIELD``, never
-   silently passed. In today's pipeline this means citations to most
-   free-text fields will fail re-validation once real (non-empty) record
-   text is involved; that is an intentional, conservative consequence of
-   stacking the trust layer on top of the injection defense, not a bug in
-   this checker. It is a real, documented limitation worth flagging for
-   whoever builds the claim-extraction step upstream of this checker.
+3. **Verify against RAW record values -- and why that is safe.** The
+   conversation's cached *trace* (``app.planner.ToolCallTrace.result``) is
+   *post-quarantine* (``app.quarantine`` -- P2.9): every non-empty free-text
+   field (medication ``name``/``dose``, problem ``title``, lab
+   ``test_name``/``value``, allergy ``substance``, ...) is redacted to
+   ``app.quarantine.REDACTED_SENTINEL`` there. Verifying against that
+   skeleton would be a defect: the checker could never confirm the patient
+   is on "Lisinopril" (the name is redacted), so P3.3 would strip the
+   flagship demo's own correct answer. So this checker verifies against the
+   RAW, pre-quarantine tool output instead, carried on the verifier-only
+   ``PlannerResult.raw_results`` channel (never on ``ToolCallTrace``, so raw
+   text never reaches the SSE stream or the observability trace).
+
+   Using raw record text here is safe precisely because this entire path is
+   deterministic -- ``CacheIndex`` build -> ``normalize`` -> equality ->
+   ``CitationStatus`` -> (P3.3) stripping -- with NO LLM anywhere.
+   Quarantine exists to stop injection text from steering the planner's
+   *LLM* call; a deterministic ``normalize(a) == normalize(b)`` comparison
+   has no such vulnerability -- an "IGNORE PREVIOUS INSTRUCTIONS" payload
+   sitting in a raw drug-name field can only ever fail to equal the claim's
+   asserted value. The trust story is exactly this: the planner LLM asserts
+   "Lisinopril" (derived from the quarantine summary), and this checker
+   deterministically confirms the RAW ``medication.name`` really is
+   "Lisinopril" -> verified; a hallucinated "Metformin" mismatches ->
+   stripped. ``REDACTED_FIELD`` is retained only as a defensive
+   belt-and-suspenders branch (a raw result should never contain the
+   sentinel); it is no longer the common path.
 
 4. **Type-coercion / normalization rules** (``_values_match``), conservative
    by design -- a value that doesn't cleanly parse into the resolved value's
@@ -114,7 +127,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from app.planner import ToolCallTrace
 from app.quarantine import REDACTED_SENTINEL
 from app.schemas.common import SourceRef
 from app.schemas.verification import Claim
@@ -165,15 +177,18 @@ class ClaimCheckResult:
 
 class CacheIndex:
     """``(tool_call_id, record_id, field) -> value`` lookup over one
-    conversation's tool-call trace. See module docstring, decision 2, for the
+    conversation's RAW tool results. See module docstring, decision 2, for the
     id scheme."""
 
     def __init__(self, records_by_call: dict[str, list[dict[str, Any]]]) -> None:
         self._records_by_call = records_by_call
 
     @classmethod
-    def from_trace(cls, trace: list[ToolCallTrace]) -> CacheIndex:
-        records_by_call = {f"call_{i}": _extract_records(entry.result) for i, entry in enumerate(trace)}
+    def from_raw_results(cls, raw_results: list[dict[str, Any] | None]) -> CacheIndex:
+        """Build the index from ``PlannerResult.raw_results`` -- the
+        verifier-only channel of un-redacted tool outputs, positionally
+        aligned 1:1 with the trace (see module docstring, decision 3)."""
+        records_by_call = {f"call_{i}": _extract_records(result) for i, result in enumerate(raw_results)}
         return cls(records_by_call)
 
     def records_for(self, tool_call_id: str) -> list[dict[str, Any]] | None:
@@ -181,19 +196,14 @@ class CacheIndex:
 
 
 def _extract_records(result: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """Records within one tool call's cached result -- see module docstring,
-    decision 2."""
+    """Records within one tool call's raw result -- see module docstring,
+    decision 2. ``None`` (an entry that produced no output) has zero records."""
     if result is None:
         return []
-    # Quarantine's wrapped shape (app.quarantine.quarantine_tool_result) is
-    # exactly {"data": <skeleton>, "summary": <str>} when free text was
-    # redacted; no tool-output schema has that exact key set, so this is an
-    # unambiguous unwrap.
-    skeleton: dict[str, Any] = result["data"] if set(result) == {"data", "summary"} else result
-    items = skeleton.get("items")
+    items = result.get("items")
     if isinstance(items, list):
         return items
-    return [skeleton]
+    return [result]
 
 
 def _record_at(records: list[dict[str, Any]], record_id: str) -> dict[str, Any] | None:
@@ -240,6 +250,10 @@ def check_source_ref(ref: SourceRef, index: CacheIndex) -> CitationCheckResult:
 
     resolved = record[ref.field]
     if resolved == REDACTED_SENTINEL:
+        # Defensive belt-and-suspenders: raw results should never contain the
+        # quarantine sentinel (this checker reads pre-quarantine values -- see
+        # module docstring, decision 3). If one somehow does, fail closed
+        # rather than compare an asserted value against placeholder text.
         return CitationCheckResult(source_ref=ref, status=CitationStatus.REDACTED_FIELD)
 
     if ref.asserted_value is None:
