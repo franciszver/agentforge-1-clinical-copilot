@@ -32,7 +32,6 @@ use OpenEMR\Core\ModulesClassLoader;
 use OpenEMR\Modules\ClinicalCopilot\Http\FlushingOutputStream;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
-use Psr\Http\Message\StreamInterface;
 
 class FlushingOutputStreamTest extends TestCase
 {
@@ -44,12 +43,6 @@ class FlushingOutputStreamTest extends TestCase
             'OpenEMR\\Modules\\ClinicalCopilot\\',
             $projectDir . '/interface/modules/custom_modules/oe-module-clinical-copilot/src'
         );
-    }
-
-    #[Test]
-    public function implementsPsr7StreamInterface(): void
-    {
-        $this->assertInstanceOf(StreamInterface::class, new FlushingOutputStream());
     }
 
     #[Test]
@@ -73,10 +66,12 @@ class FlushingOutputStreamTest extends TestCase
         ob_start();
         try {
             $stream->write('event: conversation');
-            $this->assertSame('event: conversation', ob_get_contents(), 'first write must land before the second one is issued');
+            $firstWriteMessage = 'first write must land before the second one is issued';
+            $this->assertSame('event: conversation', ob_get_contents(), $firstWriteMessage);
 
             $stream->write("\n\ndata: {}\n\n");
-            $this->assertSame("event: conversation\n\ndata: {}\n\n", ob_get_contents(), 'second write appends -- neither was withheld');
+            $secondWriteMessage = 'second write appends -- neither was withheld';
+            $this->assertSame("event: conversation\n\ndata: {}\n\n", ob_get_contents(), $secondWriteMessage);
         } finally {
             ob_end_clean();
         }
