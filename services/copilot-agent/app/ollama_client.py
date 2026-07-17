@@ -58,6 +58,11 @@ _CHAT_PATH = "/api/chat"
 # whitespace right after it), whether or not a matching "<think>" opening tag
 # is present. See the module docstring's "Live-verified quirk" note.
 _LEAKED_THINK_RE = re.compile(r"^.*?</think>\s*", re.DOTALL)
+# The closing marker itself, for the incremental (streaming) boundary scan in
+# ``_stream_deltas`` -- which cannot use ``_LEAKED_THINK_RE`` directly because
+# it resolves the boundary before the trailing ``\s*`` has necessarily
+# arrived. Kept adjacent so the two stay obviously in sync.
+_THINK_CLOSE = "</think>"
 
 
 @dataclass(frozen=True)
@@ -233,18 +238,19 @@ class OllamaClient:
         )
 
     @staticmethod
-    def _stream_deltas(response: httpx.Response) -> Generator[str, None, tuple[int | None, int | None]]:
-        """Parse an NDJSON chunk stream, yielding post-strip content deltas
-        as they resolve. See ``chat_stream``'s docstring for the leaked-
-        ``<think>`` buffering contract this implements. Returns (via
-        ``yield from``'s captured value) the same token counts
-        ``_assemble_stream`` returns.
+    def _iter_content_pieces(
+        response: httpx.Response,
+    ) -> Generator[str, None, tuple[int | None, int | None]]:
+        """Iterate an NDJSON chunk stream, yielding each chunk's non-empty
+        ``message.content`` string in order, and returning (via the generator
+        protocol) the token counts Ollama reports on the terminal
+        (``done: true``) chunk. The single source of truth for parsing the
+        chunk stream: both ``_assemble_stream`` (which joins the pieces) and
+        ``_stream_deltas`` (which resolves the leaked-``<think>`` boundary
+        incrementally) consume this.
         """
         tokens_in: int | None = None
         tokens_out: int | None = None
-        buffer = ""  # accumulated while still looking for </think>
-        trimming = False  # </think> found; swallowing leading whitespace of what follows
-        passthrough = False  # boundary resolved; yielding every piece raw from here on
         for line in response.iter_lines():
             if not line:
                 continue
@@ -257,32 +263,55 @@ class OllamaClient:
             message = chunk.get("message")
             piece = message.get("content") if isinstance(message, dict) else None
             if isinstance(piece, str) and piece:
-                if passthrough:
-                    yield piece
-                elif trimming:
-                    stripped = piece.lstrip()
-                    if stripped:
-                        trimming = False
-                        passthrough = True
-                        yield stripped
-                    # else: pure whitespace continuation -- keep trimming.
-                else:
-                    buffer += piece
-                    match = _LEAKED_THINK_RE.match(buffer)
-                    if match:
-                        remainder = buffer[match.end() :]
-                        buffer = ""
-                        if remainder:
-                            stripped = remainder.lstrip()
-                            if stripped:
-                                passthrough = True
-                                yield stripped
-                            else:
-                                trimming = True
-                        else:
-                            trimming = True
+                yield piece
             if chunk.get("done") is True:
                 tokens_in, tokens_out = OllamaClient._token_counts(chunk)
+        return tokens_in, tokens_out
+
+    @staticmethod
+    def _stream_deltas(response: httpx.Response) -> Generator[str, None, tuple[int | None, int | None]]:
+        """Parse an NDJSON chunk stream, yielding post-strip content deltas
+        as they resolve. See ``chat_stream``'s docstring for the leaked-
+        ``<think>`` buffering contract this implements. Returns (via
+        ``yield from``'s captured value) the same token counts
+        ``_assemble_stream`` returns.
+        """
+        pieces = OllamaClient._iter_content_pieces(response)
+        buffer = ""  # accumulated while still looking for </think>
+        trimming = False  # </think> found; swallowing leading whitespace of what follows
+        passthrough = False  # boundary resolved; yielding every piece raw from here on
+        while True:
+            try:
+                piece = next(pieces)
+            except StopIteration as stop:
+                tokens_in, tokens_out = stop.value
+                break
+            if passthrough:
+                yield piece
+                continue
+            if not trimming:
+                # Scan only the tail that a newly-completed marker could span
+                # (the last few pre-existing chars plus this piece), not the
+                # whole growing buffer -- qwen3:4b's leaked preamble can run
+                # to thousands of chars over many chunks, so re-scanning from
+                # offset 0 each chunk would be O(n^2).
+                scan_from = max(0, len(buffer) - (len(_THINK_CLOSE) - 1))
+                buffer += piece
+                idx = buffer.find(_THINK_CLOSE, scan_from)
+                if idx == -1:
+                    continue  # boundary not resolved yet -- keep buffering
+                # Everything up to and including </think> is dropped; the
+                # remainder falls through to the trimming block below, which
+                # swallows the leading whitespace (the ``\s*`` in _LEAKED_THINK_RE).
+                piece = buffer[idx + len(_THINK_CLOSE) :]
+                buffer = ""
+                trimming = True
+            stripped = piece.lstrip()
+            if stripped:
+                trimming = False
+                passthrough = True
+                yield stripped
+            # else: pure whitespace continuation -- keep trimming.
         if not passthrough and not trimming and buffer:
             # </think> never appeared anywhere in the response -- absence is
             # confirmed now that the stream is over, so nothing was stripped.
@@ -423,24 +452,13 @@ class OllamaClient:
         ``None``/``None`` if that chunk didn't carry them.
         """
         parts: list[str] = []
-        tokens_in: int | None = None
-        tokens_out: int | None = None
-        for line in response.iter_lines():
-            if not line:
-                continue
+        pieces = OllamaClient._iter_content_pieces(response)
+        while True:
             try:
-                chunk = json.loads(line)
-            except ValueError as exc:
-                raise OllamaError("Ollama stream contained invalid JSON") from exc
-            if not isinstance(chunk, dict):
-                continue
-            message = chunk.get("message")
-            if isinstance(message, dict):
-                piece = message.get("content")
-                if isinstance(piece, str):
-                    parts.append(piece)
-            if chunk.get("done") is True:
-                tokens_in, tokens_out = OllamaClient._token_counts(chunk)
+                parts.append(next(pieces))
+            except StopIteration as stop:
+                tokens_in, tokens_out = stop.value
+                break
         return OllamaClient._strip_leaked_thinking("".join(parts)), tokens_in, tokens_out
 
     @staticmethod

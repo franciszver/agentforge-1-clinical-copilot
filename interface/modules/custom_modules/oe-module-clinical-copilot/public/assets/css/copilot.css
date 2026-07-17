@@ -168,10 +168,10 @@
  * pending response, not a separate UI element. Pure CSS spinner -- no
  * external deps/images.
  */
-.copilot-thinking {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
+/* Shared "assistant is working" bubble surface -- the pending-response look
+   worn by both the #208 staged indicator and the #213 live reasoning zone. */
+.copilot-thinking,
+.copilot-reasoning {
     max-width: 85%;
     margin: 0 0 0.5rem;
     margin-right: auto;
@@ -181,6 +181,12 @@
     border-bottom-left-radius: 0.15rem;
     color: #495057;
     font-size: 0.85rem;
+}
+
+.copilot-thinking {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
 .copilot-thinking-spinner {
@@ -212,23 +218,11 @@
 /**
  * #213 live reasoning zone -- the reasoning_delta SSE frame's text types
  * into this SEPARATE surface, never the answer bubble (see copilot-chat.js
- * createReasoningZone). Styled like an assistant bubble (same treatment as
- * .copilot-thinking above) so it reads as part of the same "the assistant
- * is working" visual language, but its own label keeps it legible as
- * unverified/provisional text distinct from a real response.
+ * createReasoningZone). Shares the assistant-working bubble surface above
+ * so it reads as part of the same "the assistant is working" visual
+ * language, but its own label keeps it legible as unverified/provisional
+ * text distinct from a real response.
  */
-.copilot-reasoning {
-    max-width: 85%;
-    margin: 0 0 0.5rem;
-    margin-right: auto;
-    padding: 0.5rem 0.75rem;
-    background: #f1f3f5;
-    border-radius: 0.75rem;
-    border-bottom-left-radius: 0.15rem;
-    color: #495057;
-    font-size: 0.85rem;
-}
-
 .copilot-reasoning-label {
     font-weight: 600;
     margin-bottom: 0.25rem;

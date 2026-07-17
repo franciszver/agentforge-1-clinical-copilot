@@ -44,6 +44,7 @@ from app.chat import get_claim_extractor, get_planner_factory, get_token_validat
 from app.main import app
 from app.planner import Planner, PlannerCompleted, PlannerEvent, ReasoningDelta
 from app.schemas.planner import FinalAnswer, PlannerAction, PlannerDecision
+from tests.test_chat_endpoint import _iter_sse_events
 from tests.test_planner import BOUND_PATIENT_ID, _ScriptedOllamaClient
 from tests.test_planner_streaming import _FakeExtractor
 
@@ -172,15 +173,9 @@ _client = TestClient(app)
 
 
 def _sse_frames(response_text: str) -> list[tuple[str, dict[str, object]]]:
-    frames: list[tuple[str, dict[str, object]]] = []
-    for block in response_text.strip().split("\n\n"):
-        lines = block.splitlines()
-        event_line = next((line for line in lines if line.startswith("event:")), None)
-        if event_line is None:
-            continue
-        data = "".join(line[len("data:") :].strip() for line in lines if line.startswith("data:"))
-        frames.append((event_line.split(":", 1)[1].strip(), json.loads(data)))
-    return frames
+    # Reuse test_chat_endpoint's block parser; just JSON-decode each frame's
+    # data payload here (it returns the raw data string).
+    return [(name, json.loads(data)) for name, data in _iter_sse_events(response_text) if name]
 
 
 def test_stream_chat_emits_reasoning_delta_frames_before_answer_frame_verified_only() -> None:

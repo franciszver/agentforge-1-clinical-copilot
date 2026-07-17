@@ -245,10 +245,33 @@
         container.appendChild(el);
         container.scrollTop = container.scrollHeight;
 
+        // Reading scrollHeight forces a synchronous reflow; a reasoning
+        // response streams hundreds of tokens, so coalesce the auto-scroll
+        // to at most one reflow per animation frame instead of one per
+        // token. The text append itself stays synchronous (callers/tests
+        // observe it immediately). Falls back to an immediate scroll where
+        // requestAnimationFrame is unavailable.
+        var raf = window.requestAnimationFrame ? window.requestAnimationFrame.bind(window) : null;
+        var scrollPending = false;
+        function scheduleScroll() {
+            if (!raf) {
+                container.scrollTop = container.scrollHeight;
+                return;
+            }
+            if (scrollPending) {
+                return;
+            }
+            scrollPending = true;
+            raf(function () {
+                scrollPending = false;
+                container.scrollTop = container.scrollHeight;
+            });
+        }
+
         return {
             append: function (delta) {
                 text.textContent += delta;
-                container.scrollTop = container.scrollHeight;
+                scheduleScroll();
             },
             // Stops the "actively streaming" cursor treatment once the
             // verified answer has arrived -- the zone itself stays visible
