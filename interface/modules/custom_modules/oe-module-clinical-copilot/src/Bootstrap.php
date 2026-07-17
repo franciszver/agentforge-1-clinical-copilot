@@ -15,8 +15,10 @@ declare(strict_types=1);
 namespace OpenEMR\Modules\ClinicalCopilot;
 
 use OpenEMR\Common\Session\PatientSessionUtil;
+use OpenEMR\Core\OEGlobalsBag;
 use OpenEMR\Events\Main\Tabs\RenderEvent;
 use OpenEMR\Events\PatientDemographics\RenderEvent as PatientDemographicsRenderEvent;
+use OpenEMR\Events\Services\LogoFilterEvent;
 use OpenEMR\Events\UserInterface\PageHeadingRenderEvent;
 use OpenEMR\Menu\MenuEvent;
 use OpenEMR\Modules\ClinicalCopilot\Controller\CopilotPanelController;
@@ -26,6 +28,22 @@ class Bootstrap
 {
     const MODULE_INSTALLATION_PATH = "/interface/modules/custom_modules/oe-module-clinical-copilot";
     const MODULE_NAME = "oe-module-clinical-copilot";
+
+    /**
+     * The co-brand asset LogoFilterEvent rewrites the header/login primary
+     * logo web path to (issue #202) -- an original "Clinical Co-Pilot"
+     * wordmark + glyph combined with OpenEMR's own mark, so OpenEMR's
+     * identity is retained alongside the co-brand rather than replaced.
+     */
+    private const COBRAND_LOGO_ASSET = '/public/assets/icons/cobrand-logo.svg';
+
+    /**
+     * LogoFilterEvent::getLogoType() values (see LogoService::getLogo()
+     * call sites in main.php's nav-brand and login.php) to co-brand. Other
+     * logo types (favicon, secondary/small login logos, portal) are left
+     * untouched.
+     */
+    private const COBRAND_LOGO_TYPES = ['core/menu/primary', 'core/login/primary'];
 
     /**
      * Page ID for the patient demographics/dashboard screen, as dispatched
@@ -71,6 +89,10 @@ class Bootstrap
         $this->eventDispatcher->addListener(
             MenuEvent::MENU_UPDATE,
             $this->addTopNavMenuItem(...)
+        );
+        $this->eventDispatcher->addListener(
+            LogoFilterEvent::EVENT_NAME,
+            $this->rewriteLogoForCoBrand(...)
         );
     }
 
@@ -158,6 +180,32 @@ class Bootstrap
         echo '<div class="copilot-global-launcher">';
         echo $controller->renderOpenChatButton();
         echo '</div>';
+    }
+
+    /**
+     * Co-brand the header nav-brand and login primary logos (issue #202).
+     *
+     * LogoFilterEvent's replacement swaps the whole logo image rather than
+     * augmenting it (see LogoService::getLogo()), so the target asset is a
+     * combined SVG that already contains OpenEMR's own mark alongside the
+     * "Clinical Co-Pilot" wordmark -- OpenEMR's identity is retained, not
+     * replaced. Other logo types (favicon, secondary/small login logos,
+     * portal) are left untouched.
+     *
+     * @param LogoFilterEvent $event
+     * @return void
+     */
+    public function rewriteLogoForCoBrand(LogoFilterEvent $event): void
+    {
+        // Call sites pass the type with an inconsistent trailing slash
+        // (main.php's 'core/menu/primary/' vs login.php's 'core/login/primary').
+        $logoType = rtrim($event->getLogoType(), '/');
+        if (!in_array($logoType, self::COBRAND_LOGO_TYPES, true)) {
+            return;
+        }
+
+        $webRoot = OEGlobalsBag::getInstance()->getWebRoot();
+        $event->setWebPath($webRoot . self::MODULE_INSTALLATION_PATH . self::COBRAND_LOGO_ASSET);
     }
 
     private function renderAssetsOnce(CopilotPanelController $controller): string

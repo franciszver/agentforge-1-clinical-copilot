@@ -15,8 +15,10 @@ declare(strict_types=1);
 namespace OpenEMR\Tests\Isolated\Modules\ClinicalCopilot;
 
 use OpenEMR\Core\ModulesClassLoader;
+use OpenEMR\Core\OEGlobalsBag;
 use OpenEMR\Events\Main\Tabs\RenderEvent;
 use OpenEMR\Events\PatientDemographics\RenderEvent as PatientDemographicsRenderEvent;
+use OpenEMR\Events\Services\LogoFilterEvent;
 use OpenEMR\Events\UserInterface\PageHeadingRenderEvent;
 use OpenEMR\Menu\MenuEvent;
 use PHPUnit\Framework\Attributes\Test;
@@ -149,5 +151,60 @@ class BootstrapRegistrationTest extends TestCase
 
         // The pre-existing Calendar item must be untouched (additive only).
         $this->assertSame($calendar, $menu[0]);
+    }
+
+    #[Test]
+    public function testBootstrapRegistersLogoFilterListener(): void
+    {
+        $eventDispatcher = new EventDispatcher();
+        $bootstrapClass = 'OpenEMR\\Modules\\ClinicalCopilot\\Bootstrap';
+        $bootstrap = new $bootstrapClass($eventDispatcher);
+
+        $bootstrap->subscribeToEvents();
+
+        $this->assertNotEmpty(
+            $eventDispatcher->getListeners(LogoFilterEvent::EVENT_NAME),
+            'Bootstrap should register a listener for LogoFilterEvent::EVENT_NAME '
+                . '(header/login co-brand logo rewrite, issue #202)'
+        );
+    }
+
+    #[Test]
+    public function testLogoFilterListenerRewritesHeaderAndLoginPrimaryLogoToCobrandAsset(): void
+    {
+        OEGlobalsBag::getInstance()->set('webroot', '');
+
+        $eventDispatcher = new EventDispatcher();
+        $bootstrapClass = 'OpenEMR\\Modules\\ClinicalCopilot\\Bootstrap';
+        $bootstrap = new $bootstrapClass($eventDispatcher);
+        $bootstrap->subscribeToEvents();
+
+        $expectedWebPath = '/interface/modules/custom_modules/oe-module-clinical-copilot'
+            . '/public/assets/icons/cobrand-logo.svg';
+
+        // main.php's nav-brand call passes a trailing slash.
+        $headerEvent = new LogoFilterEvent('core/menu/primary/', '/some/file/path', '/original/web/path.svg');
+        $eventDispatcher->dispatch($headerEvent, LogoFilterEvent::EVENT_NAME);
+        $this->assertSame($expectedWebPath, $headerEvent->getWebPath(), 'Header nav-brand logo should be rewritten to the co-brand asset');
+
+        // login.php's call passes no trailing slash.
+        $loginEvent = new LogoFilterEvent('core/login/primary', '/some/file/path', '/original/web/path.png');
+        $eventDispatcher->dispatch($loginEvent, LogoFilterEvent::EVENT_NAME);
+        $this->assertSame($expectedWebPath, $loginEvent->getWebPath(), 'Login primary logo should be rewritten to the co-brand asset');
+    }
+
+    #[Test]
+    public function testLogoFilterListenerIgnoresOtherLogoTypes(): void
+    {
+        OEGlobalsBag::getInstance()->set('webroot', '');
+
+        $eventDispatcher = new EventDispatcher();
+        $bootstrapClass = 'OpenEMR\\Modules\\ClinicalCopilot\\Bootstrap';
+        $bootstrap = new $bootstrapClass($eventDispatcher);
+        $bootstrap->subscribeToEvents();
+
+        $secondaryEvent = new LogoFilterEvent('core/login/secondary', '/some/file/path', '/original/web/path.png');
+        $eventDispatcher->dispatch($secondaryEvent, LogoFilterEvent::EVENT_NAME);
+        $this->assertSame('/original/web/path.png', $secondaryEvent->getWebPath(), 'Non co-branded logo types should be left untouched');
     }
 }
