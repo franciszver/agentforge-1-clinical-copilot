@@ -1577,3 +1577,222 @@ describe('createChatController reasoning pacing (#219)', () => {
         expect(messagesEl.querySelector('.copilot-chat-message-assistant').textContent).toBe('Hypertension.');
     });
 });
+
+// ---------------------------------------------------------------------------
+// createChatController — #221 stale-turn guard (cross-patient display leak)
+//
+// Pre-existing bug found by the #219 gate: sendMessage()'s async chain
+// (stream frames -> waitForDrain() -> appendMessage(answer) + verification
+// render) keeps running even after reset() fires mid-wait (e.g. the global
+// launcher switches the active patient, which calls
+// CopilotChat.resetActiveConversation() / reset()). reset() stops the
+// timers/zone, but without a per-turn currency guard the pending
+// continuation still wrote the SUPERSEDED turn's answer/verification into
+// the freshly-cleared (new patient's) transcript.
+//
+// Fix: a monotonically incrementing turnSeq captured as `myTurn` at the
+// start of sendMessage(); reset() (and any later sendMessage()) bumps
+// turnSeq, so `myTurn !== turnSeq` marks the turn stale. Every DOM-mutating
+// continuation checks this before writing.
+// ---------------------------------------------------------------------------
+describe('createChatController stale-turn guard (#221)', () => {
+    const REVEAL_TICK_MS = 50;
+    const REVEAL_CAP_MS = 1500;
+
+    afterEach(() => {
+        jest.useRealTimers();
+        document.body.innerHTML = '';
+    });
+
+    function streamResp(reader) {
+        return { ok: true, status: 200, body: { getReader: () => reader } };
+    }
+
+    function makeController(fetchImpl) {
+        const messagesEl = document.createElement('div');
+        document.body.appendChild(messagesEl);
+        return {
+            messagesEl: messagesEl,
+            controller: createChatController({
+                messagesEl: messagesEl,
+                formEl: document.createElement('form'),
+                inputEl: document.createElement('textarea'),
+                context: { csrfToken: 'csrf' },
+                brokerUrl: 'https://host/base/ajax.php',
+                proxyUrl: 'https://host/base/chat-proxy.php',
+                feedbackUrl: 'https://host/base/feedback-proxy.php',
+                authorizeUrl: 'https://host/base/oauth-authorize.php',
+                fetchImpl: fetchImpl
+            })
+        };
+    }
+
+    function brokerThenReader(reader) {
+        return jest.fn((url) => {
+            if (url.endsWith('/ajax.php')) {
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({ token: 'tok' }) });
+            }
+            return Promise.resolve(streamResp(reader));
+        });
+    }
+
+    function brokerThenReaders(readers) {
+        let call = 0;
+        return jest.fn((url) => {
+            if (url.endsWith('/ajax.php')) {
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({ token: 'tok' }) });
+            }
+            const reader = readers[call];
+            call += 1;
+            return Promise.resolve(streamResp(reader));
+        });
+    }
+
+    // (a) reset() firing mid-waitForDrain (the exact #219-gate repro): the
+    // answer frame has already arrived and been captured, but the paced
+    // reveal is still draining a long reasoning buffer when reset() fires --
+    // the answer must not render into the (now cleared) transcript once the
+    // drain/cap eventually resolves.
+    test('reset() during waitForDrain (mid-wait patient switch) does not write the stale answer into the new transcript', async () => {
+        jest.useFakeTimers();
+        const reader = pausableReader();
+        const fetchImpl = brokerThenReader(reader);
+        const { messagesEl, controller } = makeController(fetchImpl);
+
+        controller.sendMessage('What meds is she on?');
+        await jest.advanceTimersByTimeAsync(0);
+
+        // Long reasoning text so the revealer is still draining when the
+        // answer frame arrives -- waitForDrain() will be genuinely pending,
+        // not already resolved.
+        reader.push('event: reasoning_delta\ndata: {"text":"' + 'a'.repeat(400) + '"}\n\n');
+        await jest.advanceTimersByTimeAsync(REVEAL_TICK_MS);
+
+        reader.push('event: answer\ndata: {"answer":"STALE PATIENT A ANSWER"}\n\n');
+        reader.finish();
+        // Let consumeSSEStream resolve and sendMessage's continuation reach
+        // waitForDrain() -- still pending (buffer not drained, cap not hit).
+        await jest.advanceTimersByTimeAsync(0);
+
+        // Patient switch fires mid-wait, BEFORE the drain (or its cap)
+        // resolves.
+        controller.reset();
+        expect(messagesEl.textContent).toBe('');
+
+        // Advance past the cap so the superseded turn's continuation runs.
+        await jest.advanceTimersByTimeAsync(REVEAL_CAP_MS + 100);
+
+        expect(messagesEl.querySelector('.copilot-chat-message-assistant')).toBeNull();
+        expect(messagesEl.textContent).not.toContain('STALE PATIENT A ANSWER');
+    });
+
+    // (b) same race, but for the verification render -- a stale verdict
+    // badge/claims block must not appear post-reset either.
+    test('reset() during waitForDrain does not write a stale verification block either', async () => {
+        jest.useFakeTimers();
+        const reader = pausableReader();
+        const fetchImpl = brokerThenReader(reader);
+        const { messagesEl, controller } = makeController(fetchImpl);
+
+        controller.sendMessage('What meds is she on?');
+        await jest.advanceTimersByTimeAsync(0);
+
+        reader.push('event: reasoning_delta\ndata: {"text":"' + 'a'.repeat(400) + '"}\n\n');
+        await jest.advanceTimersByTimeAsync(REVEAL_TICK_MS);
+
+        reader.push('event: verification\ndata: {"verdict":"verified","segments":[]}\n\n');
+        reader.push('event: answer\ndata: {"answer":"STALE ANSWER"}\n\n');
+        reader.finish();
+        await jest.advanceTimersByTimeAsync(0);
+
+        controller.reset();
+        expect(messagesEl.textContent).toBe('');
+
+        await jest.advanceTimersByTimeAsync(REVEAL_CAP_MS + 100);
+
+        expect(messagesEl.querySelector('.copilot-verification')).toBeNull();
+        expect(messagesEl.querySelector('.copilot-chat-message-assistant')).toBeNull();
+    });
+
+    // (c) a stale turn's reader is still being pumped after reset() (the
+    // fetch/reader itself is not aborted -- see the module docstring's note
+    // that overlapping sends are pre-existing/possible). A late frame from
+    // that abandoned turn -- reasoning_delta or tool_call -- must not mutate
+    // the NEW turn's zone/transcript once a fresh send has started.
+    test("a stale turn's late reasoning_delta/tool_call frame after reset() does not mutate the new turn's zone/transcript", async () => {
+        jest.useFakeTimers();
+        const reader1 = pausableReader();
+        const reader2 = pausableReader();
+        const fetchImpl = brokerThenReaders([reader1, reader2]);
+        const { messagesEl, controller } = makeController(fetchImpl);
+
+        controller.sendMessage('q1 (patient A)');
+        await jest.advanceTimersByTimeAsync(0);
+
+        reader1.push('event: reasoning_delta\ndata: {"text":"turn one reasoning"}\n\n');
+        await jest.advanceTimersByTimeAsync(2000);
+        expect(messagesEl.querySelector('.copilot-reasoning')).not.toBeNull();
+
+        // Patient switch: reset() clears the transcript/zone.
+        controller.reset();
+        expect(messagesEl.textContent).toBe('');
+
+        // A new turn starts for the new patient.
+        controller.sendMessage('q2 (patient B)');
+        await jest.advanceTimersByTimeAsync(0);
+        reader2.push('event: reasoning_delta\ndata: {"text":"turn two reasoning"}\n\n');
+        await jest.advanceTimersByTimeAsync(2000);
+
+        let zones = messagesEl.querySelectorAll('.copilot-reasoning');
+        expect(zones).toHaveLength(1);
+        expect(zones[0].textContent).toContain('turn two reasoning');
+
+        // The stale turn 1's reader (never aborted, left open on purpose --
+        // finishing it would let turn 1's own end-of-stream cleanup
+        // (clearReasoningZone in the no-answer/no-error branch) retroactively
+        // remove any leaked zone, masking the bug this test targets) delivers
+        // late frames.
+        reader1.push('event: tool_call\ndata: {"tool":"get_medications","args":{},"error":null}\n\n');
+        reader1.push('event: reasoning_delta\ndata: {"text":" STALE TURN ONE TEXT"}\n\n');
+        await jest.advanceTimersByTimeAsync(2000);
+
+        // Only turn 2's zone remains, unaffected by the stale frames -- no
+        // second zone was created, and turn 2's zone was not appended to.
+        zones = messagesEl.querySelectorAll('.copilot-reasoning');
+        expect(zones).toHaveLength(1);
+        expect(zones[0].textContent).toContain('turn two reasoning');
+        expect(zones[0].textContent).not.toContain('STALE');
+        expect(messagesEl.textContent).not.toContain('STALE');
+
+        reader1.finish();
+        reader2.finish();
+        await jest.advanceTimersByTimeAsync(2000);
+    });
+
+    // (d) regression: the normal, uninterrupted path (no reset() involved)
+    // must still render the answer and verification exactly as before.
+    test('normal uninterrupted path still renders answer + verification correctly (regression)', async () => {
+        jest.useFakeTimers();
+        const reader = pausableReader();
+        const fetchImpl = brokerThenReader(reader);
+        const { messagesEl, controller } = makeController(fetchImpl);
+
+        const sendPromise = controller.sendMessage('What meds is she on?');
+        await jest.advanceTimersByTimeAsync(0);
+
+        reader.push('event: reasoning_delta\ndata: {"text":"Checking the chart..."}\n\n');
+        await jest.advanceTimersByTimeAsync(2000);
+
+        reader.push('event: verification\ndata: {"verdict":"verified","segments":[]}\n\n');
+        reader.push('event: answer\ndata: {"answer":"She takes lisinopril."}\n\n');
+        reader.finish();
+        await jest.advanceTimersByTimeAsync(2000);
+        await sendPromise;
+
+        const assistantBubble = messagesEl.querySelector('.copilot-chat-message-assistant');
+        expect(assistantBubble).not.toBeNull();
+        expect(assistantBubble.textContent).toBe('She takes lisinopril.');
+        expect(messagesEl.querySelector('.copilot-verdict-badge')).not.toBeNull();
+        expect(messagesEl.querySelector('.copilot-reasoning').textContent).toContain('Checking the chart...');
+    });
+});
