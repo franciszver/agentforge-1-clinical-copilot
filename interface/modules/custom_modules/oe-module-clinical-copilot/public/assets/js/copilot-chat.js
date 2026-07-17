@@ -638,6 +638,17 @@
                         }
                     } else if (hadError) {
                         appendMessage(options.messagesEl, 'assistant', UNAVAILABLE_MESSAGE);
+                        // Self-heal: drop the conversation id so the NEXT send
+                        // starts a fresh conversation instead of retrying the
+                        // same failed one. Load-bearing for the global launcher
+                        // (P2.17): if the panel is left OPEN across a patient
+                        // switch, no open-time reset fires, and the stale
+                        // conversation id + new session pid is hard-rejected by
+                        // the agent's pid-binding check (chat.py) as an `error`
+                        // frame. Without this clear, every subsequent send in
+                        // that still-open panel repeats the identical rejection
+                        // and the panel wedges permanently.
+                        conversationId = null;
                     }
                 });
             }).catch(function () {

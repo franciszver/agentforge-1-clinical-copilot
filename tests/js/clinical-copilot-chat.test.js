@@ -449,3 +449,87 @@ describe('createChatController conversation reset', () => {
         expect(proxyBodies[2].conversation_id).toBeNull();
     });
 });
+
+// ---------------------------------------------------------------------------
+// createChatController — self-heal after an error frame
+//
+// If the launcher panel is left OPEN across a patient switch, no open-time
+// reset fires, and the stale conversation id + new session pid is hard-
+// rejected by the agent's pid-binding check as an `error` frame. Clearing the
+// conversation id in that branch lets the NEXT send start fresh and recover,
+// instead of the still-open panel repeating the identical rejection forever.
+// ---------------------------------------------------------------------------
+describe('createChatController error self-heal', () => {
+    afterEach(() => {
+        document.body.innerHTML = '';
+    });
+
+    function streamResp(frames) {
+        return { ok: true, status: 200, body: { getReader: () => fakeReader(frames) } };
+    }
+
+    function makeController(fetchImpl) {
+        const messagesEl = document.createElement('div');
+        document.body.appendChild(messagesEl);
+        return {
+            messagesEl: messagesEl,
+            controller: createChatController({
+                messagesEl: messagesEl,
+                formEl: document.createElement('form'),
+                inputEl: document.createElement('textarea'),
+                context: { csrfToken: 'csrf' },
+                brokerUrl: 'https://host/base/ajax.php',
+                proxyUrl: 'https://host/base/chat-proxy.php',
+                feedbackUrl: 'https://host/base/feedback-proxy.php',
+                authorizeUrl: 'https://host/base/oauth-authorize.php',
+                fetchImpl: fetchImpl
+            })
+        };
+    }
+
+    test('an error frame clears the conversation id so the next send starts a fresh conversation', async () => {
+        const proxyBodies = [];
+        let call = 0;
+        const fetchImpl = jest.fn((url, opts) => {
+            if (url.endsWith('/ajax.php')) {
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({ token: 'tok' }) });
+            }
+            proxyBodies.push(JSON.parse(opts.body));
+            call += 1;
+            if (call === 1) {
+                // First send succeeds and establishes conversation 'A'.
+                return Promise.resolve(streamResp([
+                    'event: conversation\ndata: {"conversation_id":"A"}\n\n',
+                    'event: answer\ndata: {"answer":"hi"}\n\n'
+                ]));
+            }
+            if (call === 2) {
+                // Second send (panel left open across a patient switch) is
+                // rejected by the agent -> an error frame, no answer.
+                return Promise.resolve(streamResp([
+                    'event: error\ndata: {"status":409}\n\n'
+                ]));
+            }
+            // Third send would wedge (repeat 'A') without the self-heal clear.
+            return Promise.resolve(streamResp([
+                'event: conversation\ndata: {"conversation_id":"B"}\n\n',
+                'event: answer\ndata: {"answer":"ok"}\n\n'
+            ]));
+        });
+
+        const { messagesEl, controller } = makeController(fetchImpl);
+
+        await controller.sendMessage('q1');
+        expect(proxyBodies[0].conversation_id).toBeNull();
+
+        // The rejected send still reuses 'A' (this is the request the agent
+        // rejects); the error branch then clears the id.
+        await controller.sendMessage('q2');
+        expect(proxyBodies[1].conversation_id).toBe('A');
+        expect(messagesEl.textContent).toContain('unavailable');
+
+        // Self-heal: the next send starts fresh (null), not wedged on 'A'.
+        await controller.sendMessage('q3');
+        expect(proxyBodies[2].conversation_id).toBeNull();
+    });
+});
