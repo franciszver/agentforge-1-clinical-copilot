@@ -179,18 +179,29 @@ class BootstrapRegistrationTest extends TestCase
         $bootstrap = new $bootstrapClass($eventDispatcher);
         $bootstrap->subscribeToEvents();
 
-        $expectedWebPath = '/interface/modules/custom_modules/oe-module-clinical-copilot'
-            . '/public/assets/icons/cobrand-logo.svg';
+        $assetBase = '/interface/modules/custom_modules/oe-module-clinical-copilot/public/assets/icons/';
 
-        // main.php's nav-brand call passes a trailing slash.
+        // The header nav-brand renders in a short, wide 16px-tall slot, so
+        // it gets the wide lockup. main.php's call passes a trailing slash.
         $headerEvent = new LogoFilterEvent('core/menu/primary/', '/some/file/path', '/original/web/path.svg');
         $eventDispatcher->dispatch($headerEvent, LogoFilterEvent::EVENT_NAME);
-        $this->assertSame($expectedWebPath, $headerEvent->getWebPath(), 'Header nav-brand logo should be rewritten to the co-brand asset');
+        $this->assertSame(
+            $assetBase . 'cobrand-logo.svg',
+            $headerEvent->getWebPath(),
+            'Header nav-brand logo should be rewritten to the wide co-brand asset'
+        );
 
-        // login.php's call passes no trailing slash.
+        // The login primary logo renders in a narrow, width-capped column
+        // (login page, SMART consent, telehealth emails) where the wide
+        // lockup collapses to an illegible strip, so it gets the stacked
+        // login variant. login.php's call passes no trailing slash.
         $loginEvent = new LogoFilterEvent('core/login/primary', '/some/file/path', '/original/web/path.png');
         $eventDispatcher->dispatch($loginEvent, LogoFilterEvent::EVENT_NAME);
-        $this->assertSame($expectedWebPath, $loginEvent->getWebPath(), 'Login primary logo should be rewritten to the co-brand asset');
+        $this->assertSame(
+            $assetBase . 'cobrand-logo-stacked.svg',
+            $loginEvent->getWebPath(),
+            'Login primary logo should be rewritten to the stacked co-brand variant'
+        );
     }
 
     #[Test]
