@@ -443,13 +443,22 @@ _PAIRED_NAME_NUMBER_RE = re.compile(
     r"((?:[A-Z][A-Za-z'\-]*\s+){0,2}[A-Z][A-Za-z'\-]*)\s*\(\s*(?i:patient)\s*#?\s*(\d+)\s*\)"
 )
 
+# Subject-position verbs/auxiliaries: a foreign patient number IMMEDIATELY
+# followed by one of these reads as "<patient> <verb> ..." (a claim ABOUT
+# that patient), as opposed to a value position ("5 mg", "999 mg/dL"). Used
+# only on the ANSWER side. See ``_answer_attributes_to_foreign``.
+_SUBJECT_VERB = (
+    r"(?:has|have|had|is|are|was|were|takes?|took|does|do|"
+    r"isn't|aren't|wasn't|weren't|hasn't|haven't|doesn't)"
+)
 
-def _foreign_patient_references(question: str, patient_id: int) -> set[str]:
-    """The foreign patient numbers/names ``question`` explicitly introduces --
-    i.e. NOT the bound ``patient_id``. See ``apply_subject_check``. One flat
-    set: a bare number and a paired name are checked against the answer the
-    same way (case-insensitive whole-word search), so there is no need to
-    carry them separately."""
+
+def _foreign_patient_references(question: str, patient_id: int) -> tuple[set[str], set[str]]:
+    """The foreign patient numbers and paired names ``question`` explicitly
+    introduces -- i.e. NOT the bound ``patient_id``. Returned separately
+    because the two are matched DIFFERENTLY on the answer side (see
+    ``_answer_attributes_to_foreign``): a number must sit in an attributive
+    position to count, a paired name counts on a bare whole-word occurrence."""
     numbers = {
         match.group(1) for match in _PATIENT_NUMBER_RE.finditer(question) if int(match.group(1)) != patient_id
     }
@@ -458,7 +467,40 @@ def _foreign_patient_references(question: str, patient_id: int) -> set[str]:
         for match in _PAIRED_NAME_NUMBER_RE.finditer(question)
         if int(match.group(2)) != patient_id
     }
-    return numbers | names
+    return numbers, names
+
+
+def _answer_attributes_to_foreign(answer: str, numbers: set[str], names: set[str]) -> bool:
+    """Whether ``answer`` attributes something to a foreign patient.
+
+    A paired NAME (already tied by the question to a foreign patient number
+    via apposition) counts on a bare, whole-word, case-insensitive
+    occurrence -- "Bob has no meds" when the question said "Bob (patient
+    999)". A foreign NUMBER counts ONLY in an attributive/subject position,
+    never as a bare digit, because dosages ("5 mg"), lab values ("999
+    mg/dL"), years ("in 1999") and ids routinely collide with small patient
+    numbers and would otherwise nuke a correct answer about the bound
+    patient. A number is attributive when it is:
+      - preceded by "patient"/"pt" ("patient 999", "pt 999"), or
+      - in possessive position ("999's allergies"), or
+      - immediately followed by a subject verb ("999 has ...", "999 is on ...").
+    A bare number-subject with none of these (e.g. "999, no meds") is
+    deliberately out of scope -- catching it reliably needs exactly the
+    fragile NLP #194 rules out, and the common real forms are "patient N ..."
+    and the paired name."""
+    for name in names:
+        if re.search(rf"\b{re.escape(name)}\b", answer, re.IGNORECASE):
+            return True
+    for number in numbers:
+        n = re.escape(number)
+        attributive = (
+            rf"\b(?:patient|pt)\.?\s*#?\s*{n}\b"  # patient 999 / pt 999
+            rf"|\b{n}(?:['’]s)\b"  # 999's ...
+            rf"|\b{n}\s+{_SUBJECT_VERB}\b"  # 999 has / 999 is / ...
+        )
+        if re.search(attributive, answer, re.IGNORECASE):
+            return True
+    return False
 
 
 def apply_subject_check(result: PlannerResult, *, question: str, patient_id: int) -> PlannerResult:
@@ -483,26 +525,25 @@ def apply_subject_check(result: PlannerResult, *, question: str, patient_id: int
          question, never as a bare name search. An unpaired name (e.g. a
          referring provider mentioned in the answer) is never touched.
 
-    If the final answer echoes either signal ANYWHERE (a plain whole-word
-    substring search, not anchored to patient-referring context), it is
-    replaced outright with a fixed scope notice naming only the bound
-    patient. Two things this deliberately does NOT try to distinguish, both
-    accepted as fail-closed tradeoffs (consistent with this trust layer's
-    existing bias -- e.g. ``app.verification``'s ``NO_ASSERTED_VALUE`` also
-    fails closed rather than guessing):
-      - A misattribution vs. an already-correct refusal that merely
-        *mentions* the foreign patient while declining (e.g. "I cannot
-        discuss patient 999"): both are replaced uniformly. Re-deriving that
-        distinction would require exactly the NLP-ish, false-positive-prone
-        heuristics #194 rules out, and the replacement is itself always a
-        valid refusal either way.
-      - A foreign patient NUMBER vs. that same digit string appearing
-        coincidentally as an unrelated value (a dose, a lab result) in an
-        otherwise legitimate answer about the bound patient. This only
-        matters when the question itself already named that exact foreign
-        number -- a narrow, deliberately-triggered scenario -- and an
-        unnecessary refusal is the safe-direction failure mode here, not a
-        disclosure.
+    **Answer-side matching (see ``_answer_attributes_to_foreign``).** A
+    paired NAME counts on a bare whole-word occurrence ("Bob has no meds").
+    A NUMBER counts ONLY in an attributive/subject position (preceded by
+    "patient"/"pt", possessive "999's", or followed by a subject verb) --
+    NOT as a bare digit, so a dosage ("5 mg"), lab value ("999 mg/dL") or
+    year ("in 1999") that coincidentally equals a foreign patient number the
+    question mentioned does NOT nuke an otherwise-correct answer about the
+    bound patient. On a hit the answer is replaced outright with a fixed
+    scope notice naming only the bound patient.
+
+    One thing this deliberately does NOT try to distinguish, accepted as a
+    fail-closed tradeoff (consistent with this trust layer's existing bias --
+    e.g. ``app.verification``'s ``NO_ASSERTED_VALUE`` also fails closed
+    rather than guessing): a genuine misattribution vs. an already-correct
+    refusal that merely *mentions* the foreign patient in subject position
+    while declining (e.g. "I cannot discuss patient 999"). Both are replaced
+    uniformly -- re-deriving that distinction would require exactly the
+    NLP-ish, false-positive-prone heuristics #194 rules out, and the
+    replacement is itself always a valid refusal either way.
 
     Deliberately independent of ``run_verification``/claim extraction, same
     reasoning as ``apply_recency_notice``: a pure function of the planner
@@ -532,12 +573,11 @@ def apply_subject_check(result: PlannerResult, *, question: str, patient_id: int
     larger changes than this deterministic text-level guard; out of scope
     here.
     """
-    signals = _foreign_patient_references(question, patient_id)
-    if not signals:
+    numbers, names = _foreign_patient_references(question, patient_id)
+    if not numbers and not names:
         return result
 
-    pattern = r"\b(?:" + "|".join(re.escape(signal) for signal in signals) + r")\b"
-    if not re.search(pattern, result.answer, re.IGNORECASE):
+    if not _answer_attributes_to_foreign(result.answer, numbers, names):
         return result
 
     scope_notice = f"I can only answer about the currently open patient (patient {patient_id})."

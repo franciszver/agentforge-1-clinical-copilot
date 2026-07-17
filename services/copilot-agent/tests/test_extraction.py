@@ -443,7 +443,10 @@ def test_apply_recency_notice_does_not_fire_for_a_fresh_record():
 #    cross-patient misattribution guard. See its docstring for the scoping
 #    rule: a foreign patient NUMBER the question explicitly introduces
 #    ("patient 999"), or a NAME the question binds to such a number via
-#    "<Name> (patient <N>)" apposition -- never a bare, unpaired name.
+#    "<Name> (patient <N>)" apposition -- never a bare, unpaired name. The
+#    answer-side NUMBER match requires an attributive/subject position (not a
+#    bare digit) so an incidental dose/lab/year that equals a foreign patient
+#    number never nukes a correct answer about the bound patient.
 # --------------------------------------------------------------------------
 
 
@@ -556,6 +559,99 @@ def test_apply_subject_check_ignores_the_bound_patients_own_number():
     )
 
     assert updated is result
+
+
+def test_apply_subject_check_does_not_false_positive_on_a_dose_digit_matching_a_foreign_number():
+    # The reproduced false positive: the question incidentally mentions
+    # "patient 5", and the (legitimate, about-the-bound-patient) answer
+    # contains "5 mg" -- a DOSE, not a patient reference. A bare \b5\b search
+    # would nuke this correct answer; the answer-side match must require the
+    # number to sit in an attributive/subject position, which "5 mg" is not.
+    result = _planner_result(
+        "The patient is currently prescribed metformin 5 mg twice daily.",
+        ToolName.GET_MEDICATIONS,
+        {"items": []},
+    )
+
+    updated = apply_subject_check(
+        result,
+        question="My colleague also treats patient 5 down the hall -- separately, what dose is this patient on?",
+        patient_id=1,
+    )
+
+    assert updated is result
+
+
+def test_apply_subject_check_does_not_false_positive_on_a_lab_value_matching_a_foreign_number():
+    # A lab value ("glucose 999 mg/dL") coincidentally equal to the foreign
+    # patient number "999" -- value position, not subject position.
+    result = _planner_result(
+        "The most recent glucose was 999 mg/dL, which is critically high.",
+        ToolName.GET_RECENT_LABS,
+        {"items": []},
+    )
+
+    updated = apply_subject_check(
+        result,
+        question="Look up patient 999's labs for me.",
+        patient_id=1,
+    )
+
+    assert updated is result
+
+
+def test_apply_subject_check_does_not_false_positive_on_a_year_matching_a_foreign_number():
+    # A year ("in 1999") coincidentally equal to the foreign patient number --
+    # again a value/date position, not a patient-subject position.
+    result = _planner_result(
+        "The patient was first diagnosed in 1999.",
+        ToolName.GET_PROBLEMS,
+        {"items": []},
+    )
+
+    updated = apply_subject_check(
+        result,
+        question="What problems does patient 1999 have?",
+        patient_id=1,
+    )
+
+    assert updated is result
+
+
+def test_apply_subject_check_fires_on_a_foreign_number_in_possessive_position():
+    # "999's allergies are ..." -- the number is in patient-subject
+    # (possessive) position, so it IS a misattribution and must fire.
+    result = _planner_result(
+        "999's allergies are penicillin and sulfa.",
+        ToolName.GET_ALLERGIES,
+        {"items": []},
+    )
+
+    updated = apply_subject_check(
+        result,
+        question="Tell me patient 999's allergies.",
+        patient_id=1,
+    )
+
+    assert "999" not in updated.answer
+
+
+def test_apply_subject_check_fires_on_a_foreign_number_in_patient_prefixed_position():
+    # "Patient 999 has ..." -- number preceded by "patient", clearly a
+    # patient reference, must fire.
+    result = _planner_result(
+        "Patient 999 has no medications on record.",
+        ToolName.GET_MEDICATIONS,
+        {"items": []},
+    )
+
+    updated = apply_subject_check(
+        result,
+        question="Look up patient 999's current medications.",
+        patient_id=1,
+    )
+
+    assert "999" not in updated.answer
 
 
 def test_apply_subject_check_untouched_when_question_names_a_foreign_patient_but_answer_does_not_echo_it():
