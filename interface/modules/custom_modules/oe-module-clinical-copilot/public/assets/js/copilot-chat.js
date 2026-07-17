@@ -930,6 +930,15 @@
                         // that still-open panel repeats the identical rejection
                         // and the panel wedges permanently.
                         conversationId = null;
+                    } else {
+                        // #213: neither a verified answer nor an error frame
+                        // (e.g. an empty-string answer payload, or a clean
+                        // mid-stream truncation after reasoning). Any zone
+                        // built from the streamed reasoning would otherwise be
+                        // orphaned in the DOM with its cursor still blinking,
+                        // and activeReasoningZone left dangling -- clear it,
+                        // like the hadError branch does.
+                        clearReasoningZone();
                     }
                 });
             }).catch(function () {

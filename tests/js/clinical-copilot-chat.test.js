@@ -1260,4 +1260,32 @@ describe('createChatController reasoning_delta streaming (#213)', () => {
 
         expect(messagesEl.querySelector('.copilot-reasoning')).toBeNull();
     });
+
+    test('a stream ending with reasoning but no truthy answer and no error clears the zone (no orphaned blinking cursor)', async () => {
+        // Edge case: the answer frame carries an empty string (falsy), or the
+        // stream completes cleanly after reasoning with no answer/error at
+        // all. The zone must not be left in the DOM still "actively
+        // streaming" (permanent cursor) with activeReasoningZone dangling.
+        const reader = pausableReader();
+        const fetchImpl = brokerThenReader(reader);
+        const { messagesEl, controller } = makeController(fetchImpl);
+
+        const sendPromise = controller.sendMessage('What meds is she on?');
+        await flushMicrotasks();
+
+        reader.push('event: reasoning_delta\ndata: {"text":"thinking..."}\n\n');
+        await flushMicrotasks();
+        expect(messagesEl.querySelector('.copilot-reasoning')).not.toBeNull();
+
+        // Empty-string answer (falsy) then clean end -- neither the answer
+        // branch nor the error branch fires.
+        reader.push('event: answer\ndata: {"answer":""}\n\n');
+        reader.finish();
+        await sendPromise;
+
+        expect(messagesEl.querySelector('.copilot-reasoning')).toBeNull();
+
+        // And a subsequent reset() must not throw on a dangling handle.
+        expect(() => controller.reset()).not.toThrow();
+    });
 });
