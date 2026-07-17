@@ -856,6 +856,17 @@
         // clear a mid-flight zone even though it is a local var inside
         // sendMessage.
         var activeReasoningZone = null;
+        // #221: per-turn currency guard. sendMessage() captures
+        // `myTurn = ++turnSeq` at the start of a turn; reset() (and any
+        // later sendMessage()) bumps turnSeq again, so an older turn's
+        // `myTurn` no longer equals `turnSeq`. Every DOM-mutating
+        // continuation in sendMessage checks this before writing, so a
+        // superseded turn's pending continuation (e.g. reset() firing
+        // mid-wait during a patient switch, or a stale frame arriving on an
+        // abandoned turn's still-open stream after a new turn has started)
+        // cannot write its stale answer/verification/reasoning into the
+        // current transcript. See issue #221.
+        var turnSeq = 0;
         var redirect = options.redirectImpl || function (url) {
             window.location.assign(url);
         };
@@ -888,6 +899,10 @@
         }
 
         function sendMessage(text) {
+            // #221: this turn's identity -- see turnSeq above. A NEW
+            // sendMessage() call also supersedes an older in-flight one via
+            // this same increment.
+            var myTurn = ++turnSeq;
             // The first-open "about" explainer (P2.20) gives way to the
             // transcript as soon as a conversation starts -- a no-op on
             // every send after the first (already hidden) and if no about
@@ -959,6 +974,13 @@
                 // generic.
                 if (resp.status === 400) {
                     return resp.json().then(function (data) {
+                        // #221: this turn may have been superseded (e.g. a
+                        // patient switch called reset()) while the 400 body
+                        // was being parsed -- do not write into the current
+                        // transcript on its behalf.
+                        if (myTurn !== turnSeq) {
+                            return;
+                        }
                         stopThinking();
                         var noPatient = data && data.reason === 'no_patient_in_session';
                         appendMessage(
@@ -967,6 +989,9 @@
                             noPatient ? NO_PATIENT_MESSAGE : UNAVAILABLE_MESSAGE
                         );
                     }).catch(function () {
+                        if (myTurn !== turnSeq) {
+                            return;
+                        }
                         stopThinking();
                         appendMessage(options.messagesEl, 'assistant', UNAVAILABLE_MESSAGE);
                     });
@@ -978,6 +1003,15 @@
                 var verificationData = null;
                 var hadError = false;
                 return consumeSSEStream(resp.body.getReader(), function (frame) {
+                    // #221: this turn's stream is not aborted on reset() (see
+                    // the module docstring's note that overlapping requests
+                    // are pre-existing/possible) -- a superseded turn's late
+                    // frame (e.g. reasoning_delta/tool_call arriving after a
+                    // patient switch already started a new turn) must not
+                    // touch the DOM or recreate the thinking/reasoning zone.
+                    if (myTurn !== turnSeq) {
+                        return;
+                    }
                     if (frame.event === 'conversation' && frame.data) {
                         if (typeof frame.data.conversation_id === 'string') {
                             conversationId = frame.data.conversation_id;
@@ -1016,6 +1050,14 @@
                         hadError = true;
                     }
                 }).then(function () {
+                    // #221: guards the hadError/no-op branches below (the
+                    // answer branch's own render point is guarded again
+                    // after the additional waitForDrain() await, since
+                    // reset() can fire during that wait even when it did not
+                    // fire before it).
+                    if (myTurn !== turnSeq) {
+                        return;
+                    }
                     if (answerText) {
                         // #219: the verified answer must not be blocked on
                         // the full paced reveal -- wait only up to
@@ -1024,6 +1066,15 @@
                         // reasoning was ever streamed).
                         var drainWait = reasoningRevealer ? reasoningRevealer.waitForDrain() : Promise.resolve();
                         return drainWait.then(function () {
+                            // #221: reset() (a patient switch) may have fired
+                            // WHILE waiting for the paced reveal to drain --
+                            // this is the primary race the guard defends
+                            // against: the answer/verification must not
+                            // render into a transcript that has since been
+                            // cleared for a different patient.
+                            if (myTurn !== turnSeq) {
+                                return;
+                            }
                             stopThinking();
                             // #213: the verified answer has arrived -- stop
                             // the zone's "actively streaming" cursor
@@ -1082,6 +1133,12 @@
                     }
                 });
             }).catch(function () {
+                // #221: a superseded turn's request/stream failure must not
+                // paint the generic error bubble into a transcript that has
+                // since moved on to a different patient/turn.
+                if (myTurn !== turnSeq) {
+                    return;
+                }
                 stopThinking();
                 clearReasoningZone();
                 appendMessage(options.messagesEl, 'assistant', UNAVAILABLE_MESSAGE);
@@ -1112,6 +1169,12 @@
         // rejects a mismatched pid. The cached bearer token is user-scoped,
         // not patient-scoped, so it is intentionally kept.
         function reset() {
+            // #221: invalidate any turn currently in flight -- see turnSeq
+            // above. Any `myTurn` captured by an earlier sendMessage() call
+            // no longer equals turnSeq after this, so that turn's pending
+            // continuations (and any late frames its still-open stream goes
+            // on to deliver) become no-ops.
+            turnSeq++;
             // #208: a reset() during an in-flight send (e.g. a patient
             // switch mid-wait) must stop the fallback timer too, not just
             // rely on the textContent clear below to visually drop the
