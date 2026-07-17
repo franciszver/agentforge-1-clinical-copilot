@@ -39,6 +39,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Generator, Iterator
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
@@ -169,6 +170,124 @@ class OllamaClient:
             LlmCallStats(model=self._model, start_ts=start_ts, end_ts=time.time(), ok=True, tokens_in=tokens_in, tokens_out=tokens_out)
         )
         return content
+
+    def chat_stream(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        options: dict[str, Any] | None = None,
+    ) -> Iterator[str]:
+        """Send a chat request and yield response text deltas as they arrive.
+
+        Same request shape as ``chat()`` (``stream: true``, ``think: false``,
+        ``temperature: 0`` unless overridden) -- this is the incremental
+        sibling for a caller (P213, ``app.planner``'s two-call final-answer
+        step) that wants to render the model's free-text reasoning as it is
+        generated instead of waiting for the whole response.
+
+        Leaked-``<think>`` safety (hard constraint): NOTHING is yielded until
+        the ``</think>`` boundary is resolved -- see the module docstring's
+        "Live-verified quirk" note and ``_strip_leaked_thinking``, which this
+        reproduces incrementally instead of via one post-hoc regex sub.
+        Concretely: every arriving piece is buffered until the accumulated
+        buffer contains ``</think>``, at which point everything up to and
+        including it is dropped, any purely-whitespace continuation right
+        after it is also swallowed (matching ``\\s*`` in
+        ``_LEAKED_THINK_RE``, even when that whitespace lands in a *later*
+        chunk than the marker itself), and the first non-whitespace
+        remainder is yielded -- every piece after that streams through raw,
+        immediately. If ``</think>`` never appears, nothing is yielded until
+        the stream ends, at which point the whole buffered content is
+        yielded as one final delta: absence is only ever "confirmed" once
+        the stream is known to be over, never assumed mid-stream. The joined
+        output of every delta this yields is always exactly
+        ``_strip_leaked_thinking(<the full response>)`` -- byte-identical to
+        what ``chat()`` returns for the same request.
+
+        Appends one ``LlmCallStats`` entry to ``call_stats``, exactly like
+        ``chat()`` -- ``chat()`` itself is untouched by this method existing
+        (additive only).
+        """
+        _logger.info("ollama chat stream call", extra={"model": self._model})
+        body = self._build_body(messages, stream=True, options=options)
+        start_ts = time.time()
+        try:
+            response = self._post_chat(body)
+            tokens_in, tokens_out = yield from self._stream_deltas(response)
+        except OllamaError as exc:
+            end_ts = time.time()
+            self.call_stats.append(
+                LlmCallStats(model=self._model, start_ts=start_ts, end_ts=end_ts, ok=False, tokens_in=None, tokens_out=None)
+            )
+            _logger.warning(
+                "ollama chat stream call failed",
+                extra={
+                    "model": self._model,
+                    "error_type": type(exc).__name__,
+                    "duration_ms": round((end_ts - start_ts) * 1000, 1),
+                },
+            )
+            raise
+        self.call_stats.append(
+            LlmCallStats(model=self._model, start_ts=start_ts, end_ts=time.time(), ok=True, tokens_in=tokens_in, tokens_out=tokens_out)
+        )
+
+    @staticmethod
+    def _stream_deltas(response: httpx.Response) -> Generator[str, None, tuple[int | None, int | None]]:
+        """Parse an NDJSON chunk stream, yielding post-strip content deltas
+        as they resolve. See ``chat_stream``'s docstring for the leaked-
+        ``<think>`` buffering contract this implements. Returns (via
+        ``yield from``'s captured value) the same token counts
+        ``_assemble_stream`` returns.
+        """
+        tokens_in: int | None = None
+        tokens_out: int | None = None
+        buffer = ""  # accumulated while still looking for </think>
+        trimming = False  # </think> found; swallowing leading whitespace of what follows
+        passthrough = False  # boundary resolved; yielding every piece raw from here on
+        for line in response.iter_lines():
+            if not line:
+                continue
+            try:
+                chunk = json.loads(line)
+            except ValueError as exc:
+                raise OllamaError("Ollama stream contained invalid JSON") from exc
+            if not isinstance(chunk, dict):
+                continue
+            message = chunk.get("message")
+            piece = message.get("content") if isinstance(message, dict) else None
+            if isinstance(piece, str) and piece:
+                if passthrough:
+                    yield piece
+                elif trimming:
+                    stripped = piece.lstrip()
+                    if stripped:
+                        trimming = False
+                        passthrough = True
+                        yield stripped
+                    # else: pure whitespace continuation -- keep trimming.
+                else:
+                    buffer += piece
+                    match = _LEAKED_THINK_RE.match(buffer)
+                    if match:
+                        remainder = buffer[match.end() :]
+                        buffer = ""
+                        if remainder:
+                            stripped = remainder.lstrip()
+                            if stripped:
+                                passthrough = True
+                                yield stripped
+                            else:
+                                trimming = True
+                        else:
+                            trimming = True
+            if chunk.get("done") is True:
+                tokens_in, tokens_out = OllamaClient._token_counts(chunk)
+        if not passthrough and not trimming and buffer:
+            # </think> never appeared anywhere in the response -- absence is
+            # confirmed now that the stream is over, so nothing was stripped.
+            yield buffer
+        return tokens_in, tokens_out
 
     def extract(
         self,
