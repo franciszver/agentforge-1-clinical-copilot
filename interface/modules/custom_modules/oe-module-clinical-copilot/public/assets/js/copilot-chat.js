@@ -857,19 +857,37 @@
         // sendMessage.
         var activeReasoningZone = null;
         // #221: per-turn currency guard. sendMessage() captures
-        // `myTurn = ++turnSeq` at the start of a turn; reset() (and any
-        // later sendMessage()) bumps turnSeq again, so an older turn's
-        // `myTurn` no longer equals `turnSeq`. Every DOM-mutating
-        // continuation in sendMessage checks this before writing, so a
-        // superseded turn's pending continuation (e.g. reset() firing
-        // mid-wait during a patient switch, or a stale frame arriving on an
-        // abandoned turn's still-open stream after a new turn has started)
-        // cannot write its stale answer/verification/reasoning into the
-        // current transcript. See issue #221.
+        // `myTurn = ++turnSeq` at the start of a turn; reset() bumps turnSeq
+        // again, so an in-flight turn's `myTurn` no longer equals `turnSeq`.
+        // Every DOM-mutating continuation in sendMessage checks this before
+        // writing, so a turn superseded by reset() (a patient switch firing
+        // mid-wait, whose abandoned stream keeps delivering frames after the
+        // transcript has moved on) cannot write its stale
+        // answer/verification/reasoning into the current transcript. reset()
+        // is the ONLY supersession: the send-lock below prevents a second,
+        // overlapping send from starting while one is in flight, so no turn
+        // is ever superseded by another sendMessage(). See issue #221.
         var turnSeq = 0;
         var redirect = options.redirectImpl || function (url) {
             window.location.assign(url);
         };
+
+        // #221 send-lock: while a turn is streaming, the message input and its
+        // submit button are disabled so the user cannot start a second,
+        // overlapping send. That is what makes reset() the only supersession
+        // (see turnSeq above): a superseded turn skips its own cleanup, so if
+        // an overlapping send could supersede an in-flight turn it would strand
+        // that turn's spinner/reasoning zone in the transcript. Re-enabled on
+        // every sendMessage() exit path and by reset(). The submit button is
+        // looked up from the form so no extra option needs threading through;
+        // it is absent in unit tests that pass a bare <form>, hence the guard.
+        function setSendEnabled(enabled) {
+            options.inputEl.disabled = !enabled;
+            var submitBtn = options.formEl.querySelector('button[type="submit"]');
+            if (submitBtn) {
+                submitBtn.disabled = !enabled;
+            }
+        }
 
         function ensureToken() {
             if (cachedToken) {
@@ -899,10 +917,16 @@
         }
 
         function sendMessage(text) {
-            // #221: this turn's identity -- see turnSeq above. A NEW
-            // sendMessage() call also supersedes an older in-flight one via
-            // this same increment.
+            // #221: this turn's identity -- see turnSeq above. Only reset()
+            // supersedes an in-flight turn (the send-lock prevents overlapping
+            // sends); stale() reports whether reset() has since fired.
             var myTurn = ++turnSeq;
+            function stale() {
+                return myTurn !== turnSeq;
+            }
+            // #221 send-lock: disable input/submit for the duration of this
+            // turn; every exit path below re-enables it (see setSendEnabled).
+            setSendEnabled(false);
             // The first-open "about" explainer (P2.20) gives way to the
             // transcript as soon as a conversation starts -- a no-op on
             // every send after the first (already hidden) and if no about
@@ -977,11 +1001,12 @@
                         // #221: this turn may have been superseded (e.g. a
                         // patient switch called reset()) while the 400 body
                         // was being parsed -- do not write into the current
-                        // transcript on its behalf.
-                        if (myTurn !== turnSeq) {
+                        // transcript on its behalf (reset() re-enables input).
+                        if (stale()) {
                             return;
                         }
                         stopThinking();
+                        setSendEnabled(true);
                         var noPatient = data && data.reason === 'no_patient_in_session';
                         appendMessage(
                             options.messagesEl,
@@ -989,10 +1014,11 @@
                             noPatient ? NO_PATIENT_MESSAGE : UNAVAILABLE_MESSAGE
                         );
                     }).catch(function () {
-                        if (myTurn !== turnSeq) {
+                        if (stale()) {
                             return;
                         }
                         stopThinking();
+                        setSendEnabled(true);
                         appendMessage(options.messagesEl, 'assistant', UNAVAILABLE_MESSAGE);
                     });
                 }
@@ -1003,13 +1029,12 @@
                 var verificationData = null;
                 var hadError = false;
                 return consumeSSEStream(resp.body.getReader(), function (frame) {
-                    // #221: this turn's stream is not aborted on reset() (see
-                    // the module docstring's note that overlapping requests
-                    // are pre-existing/possible) -- a superseded turn's late
-                    // frame (e.g. reasoning_delta/tool_call arriving after a
-                    // patient switch already started a new turn) must not
-                    // touch the DOM or recreate the thinking/reasoning zone.
-                    if (myTurn !== turnSeq) {
+                    // #221: this turn's stream is not aborted on reset() -- the
+                    // abandoned request keeps delivering frames after a patient
+                    // switch cleared the transcript. A superseded turn's late
+                    // frame (e.g. reasoning_delta/tool_call) must not touch the
+                    // DOM or recreate the thinking/reasoning zone.
+                    if (stale()) {
                         return;
                     }
                     if (frame.event === 'conversation' && frame.data) {
@@ -1055,7 +1080,7 @@
                     // after the additional waitForDrain() await, since
                     // reset() can fire during that wait even when it did not
                     // fire before it).
-                    if (myTurn !== turnSeq) {
+                    if (stale()) {
                         return;
                     }
                     if (answerText) {
@@ -1071,11 +1096,13 @@
                             // this is the primary race the guard defends
                             // against: the answer/verification must not
                             // render into a transcript that has since been
-                            // cleared for a different patient.
-                            if (myTurn !== turnSeq) {
+                            // cleared for a different patient (reset()
+                            // re-enables input on that path).
+                            if (stale()) {
                                 return;
                             }
                             stopThinking();
+                            setSendEnabled(true);
                             // #213: the verified answer has arrived -- stop
                             // the zone's "actively streaming" cursor
                             // treatment, but keep it visible above the
@@ -1102,6 +1129,7 @@
                         });
                     }
                     stopThinking();
+                    setSendEnabled(true);
                     if (hadError) {
                         // #213: an errored turn never gets a verified answer,
                         // so any in-flight (necessarily unverified/partial)
@@ -1135,11 +1163,13 @@
             }).catch(function () {
                 // #221: a superseded turn's request/stream failure must not
                 // paint the generic error bubble into a transcript that has
-                // since moved on to a different patient/turn.
-                if (myTurn !== turnSeq) {
+                // since moved on to a different patient/turn (reset()
+                // re-enables input on that path).
+                if (stale()) {
                     return;
                 }
                 stopThinking();
+                setSendEnabled(true);
                 clearReasoningZone();
                 appendMessage(options.messagesEl, 'assistant', UNAVAILABLE_MESSAGE);
             });
@@ -1147,6 +1177,12 @@
 
         function handleSubmit(evt) {
             evt.preventDefault();
+            // #221 send-lock: a send is already streaming (input disabled) --
+            // ignore the re-submit rather than starting a second, overlapping
+            // turn that would supersede and orphan the first turn's spinner.
+            if (options.inputEl.disabled) {
+                return;
+            }
             var text = options.inputEl.value.trim();
             if (!text) {
                 return;
@@ -1190,6 +1226,11 @@
             if (activeReasoningZone) {
                 activeReasoningZone.stop();
             }
+            // #221 send-lock: reset() supersedes any in-flight turn (whose own
+            // exit paths are now skipped by the stale() guard), so it must
+            // re-enable the input itself -- otherwise a patient switch mid-send
+            // would leave the new patient's panel permanently unable to send.
+            setSendEnabled(true);
             conversationId = null;
             options.messagesEl.textContent = '';
             // A fresh conversation is a fresh first-open: bring the about
