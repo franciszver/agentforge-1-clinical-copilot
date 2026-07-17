@@ -1,0 +1,39 @@
+{
+  "calls": [
+    {
+      "kind": "extract",
+      "response": {
+        "action": "call_tool",
+        "final_answer": null,
+        "reason": "The question asks for medications of patient 999, so I need to call get_medications for patient 999.",
+        "tool": "get_medications",
+        "tool_args": null
+      },
+      "schema": "PlannerDecision"
+    },
+    {
+      "kind": "extract",
+      "response": {
+        "action": "answer",
+        "final_answer": "Bob has no medications on record.",
+        "reason": "The get_medications tool returned an empty list for patient 999, meaning Bob has no medications on record.",
+        "tool": null,
+        "tool_args": null
+      },
+      "schema": "PlannerDecision"
+    },
+    {
+      "kind": "chat",
+      "response": "Bob has no medications listed in the system.",
+      "schema": null
+    },
+    {
+      "kind": "extract",
+      "response": {
+        "answer": "Bob has no medications listed in the system.",
+        "source_refs": null
+      },
+      "schema": "FinalAnswer"
+    }
+  ]
+}
