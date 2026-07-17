@@ -1796,3 +1796,223 @@ describe('createChatController stale-turn guard (#221)', () => {
         expect(messagesEl.querySelector('.copilot-reasoning').textContent).toContain('Checking the chart...');
     });
 });
+
+// ---------------------------------------------------------------------------
+// createChatController — #221 send-lock (regression found by the #221 gate)
+//
+// The turnSeq content-guard suppresses a superseded turn's stale WRITE, but a
+// superseded turn also skips its own end-of-life cleanup (stopThinking /
+// clearReasoningZone). For reset() that is fine -- reset() runs the cleanup
+// itself -- but an OVERLAPPING send (turn B superseding turn A with no reset,
+// reachable because nothing disabled the input/submit mid-send) would leave
+// turn A's spinner (or un-finalized reasoning zone) orphaned in messagesEl
+// forever. The fix disables the input + submit button while a send is in
+// flight and re-enables them on every exit path, removing the overlapping-send
+// scenario entirely; the only supersession left is reset(), which cleans up.
+// ---------------------------------------------------------------------------
+describe('createChatController send-lock (#221 regression)', () => {
+    beforeEach(() => {
+        jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+        jest.useRealTimers();
+        document.body.innerHTML = '';
+    });
+
+    function streamResp(reader) {
+        return { ok: true, status: 200, body: { getReader: () => reader } };
+    }
+
+    // Wires a controller to a REAL form + textarea + submit button and calls
+    // init(), so the form-submit path (handleSubmit) -- the path the send-lock
+    // actually gates -- is exercised, not a direct sendMessage() call.
+    function makeWiredController(fetchImpl) {
+        const messagesEl = document.createElement('div');
+        const formEl = document.createElement('form');
+        const inputEl = document.createElement('textarea');
+        const submitBtn = document.createElement('button');
+        submitBtn.type = 'submit';
+        formEl.appendChild(inputEl);
+        formEl.appendChild(submitBtn);
+        document.body.appendChild(messagesEl);
+        document.body.appendChild(formEl);
+        const controller = createChatController({
+            messagesEl: messagesEl,
+            formEl: formEl,
+            inputEl: inputEl,
+            context: { csrfToken: 'csrf' },
+            brokerUrl: 'https://host/base/ajax.php',
+            proxyUrl: 'https://host/base/chat-proxy.php',
+            feedbackUrl: 'https://host/base/feedback-proxy.php',
+            authorizeUrl: 'https://host/base/oauth-authorize.php',
+            fetchImpl: fetchImpl
+        });
+        controller.init();
+        return { messagesEl, formEl, inputEl, submitBtn, controller };
+    }
+
+    function submitForm(inputEl, formEl, text) {
+        inputEl.value = text;
+        formEl.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    }
+
+    function flushAsync(ms) {
+        return jest.advanceTimersByTimeAsync(ms || 0);
+    }
+
+    function brokerThenReader(reader) {
+        return jest.fn((url) => {
+            if (url.endsWith('/ajax.php')) {
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({ token: 'tok' }) });
+            }
+            return Promise.resolve(streamResp(reader));
+        });
+    }
+
+    function brokerThenReaders(readers) {
+        let call = 0;
+        return jest.fn((url) => {
+            if (url.endsWith('/ajax.php')) {
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({ token: 'tok' }) });
+            }
+            const reader = readers[call];
+            call += 1;
+            return Promise.resolve(streamResp(reader));
+        });
+    }
+
+    test('disables the input + submit button while a send is in flight, re-enables them when the answer arrives', async () => {
+        const reader = pausableReader();
+        const { inputEl, submitBtn, formEl } = makeWiredController(brokerThenReader(reader));
+
+        submitForm(inputEl, formEl, 'q1');
+        await flushAsync();
+
+        expect(inputEl.disabled).toBe(true);
+        expect(submitBtn.disabled).toBe(true);
+
+        reader.push('event: answer\ndata: {"answer":"ok"}\n\n');
+        reader.finish();
+        await flushAsync(2000);
+
+        expect(inputEl.disabled).toBe(false);
+        expect(submitBtn.disabled).toBe(false);
+    });
+
+    test('re-enables the input on an error frame', async () => {
+        const reader = pausableReader();
+        const { inputEl, submitBtn, formEl } = makeWiredController(brokerThenReader(reader));
+
+        submitForm(inputEl, formEl, 'q1');
+        await flushAsync();
+        expect(inputEl.disabled).toBe(true);
+
+        reader.push('event: error\ndata: {"status":409}\n\n');
+        reader.finish();
+        await flushAsync();
+
+        expect(inputEl.disabled).toBe(false);
+        expect(submitBtn.disabled).toBe(false);
+    });
+
+    test('re-enables the input on the 400 no-patient branch', async () => {
+        // Pending proxy response so the in-flight disabled state is observable
+        // BEFORE the 400 branch resolves and re-enables.
+        let resolveProxy;
+        const proxyPromise = new Promise((r) => { resolveProxy = r; });
+        const fetchImpl = jest.fn((url) => {
+            if (url.endsWith('/ajax.php')) {
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({ token: 'tok' }) });
+            }
+            return proxyPromise;
+        });
+        const { messagesEl, inputEl, submitBtn, formEl } = makeWiredController(fetchImpl);
+
+        submitForm(inputEl, formEl, 'q1');
+        await flushAsync();
+        expect(inputEl.disabled).toBe(true);
+
+        resolveProxy({
+            status: 400,
+            json: () => Promise.resolve({ reason: 'no_patient_in_session' })
+        });
+        await flushAsync();
+
+        expect(inputEl.disabled).toBe(false);
+        expect(submitBtn.disabled).toBe(false);
+        expect(messagesEl.textContent).toContain('Open a patient chart first');
+    });
+
+    test('re-enables the input on the outer catch (proxy request failure)', async () => {
+        let resolveProxy;
+        const proxyPromise = new Promise((r) => { resolveProxy = r; });
+        const fetchImpl = jest.fn((url) => {
+            if (url.endsWith('/ajax.php')) {
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({ token: 'tok' }) });
+            }
+            return proxyPromise;
+        });
+        const { inputEl, submitBtn, formEl } = makeWiredController(fetchImpl);
+
+        submitForm(inputEl, formEl, 'q1');
+        await flushAsync();
+        expect(inputEl.disabled).toBe(true);
+
+        // Not ok, no body -> throws inside the chain -> outer catch.
+        resolveProxy({ ok: false, status: 500 });
+        await flushAsync();
+
+        expect(inputEl.disabled).toBe(false);
+        expect(submitBtn.disabled).toBe(false);
+    });
+
+    test('reset() re-enables the input while a send is in flight', async () => {
+        const reader = pausableReader();
+        const { inputEl, submitBtn, formEl, controller } = makeWiredController(brokerThenReader(reader));
+
+        submitForm(inputEl, formEl, 'q1');
+        await flushAsync();
+        expect(inputEl.disabled).toBe(true);
+
+        controller.reset();
+
+        expect(inputEl.disabled).toBe(false);
+        expect(submitBtn.disabled).toBe(false);
+    });
+
+    // The regression the gate found: a second (overlapping) send while the
+    // first is in flight must be ignored, so turn A is never superseded by a
+    // turn B that would strand turn A's spinner. Fails without the send-lock
+    // (turn B starts, leaving turn A's indicator orphaned after turn A's stale
+    // continuation skips its own stopThinking()).
+    test('ignores a second form submit while a send is in flight -- no orphaned spinner from a superseded turn', async () => {
+        const reader1 = pausableReader();
+        const reader2 = pausableReader();
+        const fetchImpl = brokerThenReaders([reader1, reader2]);
+        const { messagesEl, inputEl, formEl } = makeWiredController(fetchImpl);
+
+        submitForm(inputEl, formEl, 'q1');
+        await flushAsync();
+        expect(messagesEl.querySelectorAll('.copilot-thinking')).toHaveLength(1);
+        expect(inputEl.disabled).toBe(true);
+
+        // Overlapping send attempt via the form while the first is in flight.
+        submitForm(inputEl, formEl, 'q2');
+        await flushAsync();
+
+        // Turn B never started -- still exactly one thinking indicator.
+        expect(messagesEl.querySelectorAll('.copilot-thinking')).toHaveLength(1);
+
+        // Complete turn A; it cleans up its OWN indicator (no orphan left).
+        reader1.push('event: answer\ndata: {"answer":"ok"}\n\n');
+        reader1.finish();
+        await flushAsync(2000);
+
+        expect(messagesEl.querySelectorAll('.copilot-thinking')).toHaveLength(0);
+        expect(messagesEl.querySelectorAll('.copilot-reasoning')).toHaveLength(0);
+        const bubbles = messagesEl.querySelectorAll('.copilot-chat-message-assistant');
+        expect(bubbles).toHaveLength(1);
+        expect(bubbles[0].textContent).toBe('ok');
+    });
+});
