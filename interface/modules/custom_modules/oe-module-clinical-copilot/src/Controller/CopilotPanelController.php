@@ -73,13 +73,12 @@ final class CopilotPanelController
     }
 
     /**
-     * Render the persistent open-chat button injected into the page
-     * heading, plus the chat panel it toggles: message list, input, and
-     * send button (P2.14). Structure/accessibility (labels, aria-live
-     * message log) is server-rendered here; copilot-chat.js owns behavior
-     * (submit handling, SSE consumption, appending messages).
+     * Render just the persistent open-chat button (no panel). Split out
+     * from renderOpenChatButton() so the global launcher (Bootstrap's
+     * renderGlobalLauncher(), P2.17) can reuse the exact same button
+     * markup for its "no patient" empty state without forking it.
      */
-    public function renderOpenChatButton(): string
+    public function renderOpenChatButtonElement(): string
     {
         ob_start();
         ?>
@@ -89,9 +88,20 @@ final class CopilotPanelController
                 title="<?php echo xla('Open Clinical Co-Pilot'); ?>">
             <i class="fa fa-comment-medical"></i> <?php echo xlt('Co-Pilot'); ?>
         </button>
-        <?php echo $this->renderChatPanel(false); ?>
         <?php
         return $this->endCapture();
+    }
+
+    /**
+     * Render the persistent open-chat button injected into the page
+     * heading, plus the chat panel it toggles: message list, input, and
+     * send button (P2.14). Structure/accessibility (labels, aria-live
+     * message log) is server-rendered here; copilot-chat.js owns behavior
+     * (submit handling, SSE consumption, appending messages).
+     */
+    public function renderOpenChatButton(): string
+    {
+        return $this->renderOpenChatButtonElement() . $this->renderChatPanel(false);
     }
 
     /**
@@ -128,6 +138,42 @@ final class CopilotPanelController
                     <i class="fa fa-paper-plane"></i>
                 </button>
             </form>
+        </div>
+        <?php
+        return $this->endCapture();
+    }
+
+    /**
+     * Render the "no patient" empty-state message shown wherever the chat
+     * panel would otherwise appear, but no patient is bound to the session:
+     * the standalone PWA page (CopilotStandaloneController) and the global
+     * launcher panel (Bootstrap::renderGlobalLauncher(), P2.17). The message
+     * lives here so both callers stay in sync instead of forking the text.
+     */
+    public function renderEmptyState(): string
+    {
+        ob_start();
+        ?>
+        <p><?php echo xlt('Open a patient chart first to start a Co-Pilot conversation.'); ?></p>
+        <?php
+        return $this->endCapture();
+    }
+
+    /**
+     * Render the empty-state message wrapped in the same toggleable panel
+     * shell as renderChatPanel() (same id/classes, so copilot.js's existing
+     * button-toggle wiring works unmodified) -- used by the global launcher
+     * on pages with no patient in session, where a real chat form would
+     * have nothing to talk about.
+     */
+    public function renderEmptyStatePanel(): string
+    {
+        ob_start();
+        ?>
+        <div id="copilot-chat-panel" class="copilot-chat-panel copilot-hidden" aria-hidden="true">
+            <div class="copilot-panel-empty-state">
+                <?php echo $this->renderEmptyState(); ?>
+            </div>
         </div>
         <?php
         return $this->endCapture();
