@@ -189,14 +189,37 @@ final class ChatProxyController
             ]);
 
             $promise->wait();
-        } catch (RequestException $e) {
-            $upstreamResponse = $e->getResponse();
-            $this->emitErrorFrame($upstreamResponse !== null ? $upstreamResponse->getStatusCode() : 0);
-            return;
-        } catch (GuzzleException) {
-            $this->emitErrorFrame(0);
+        } catch (GuzzleException $e) {
+            $this->emitErrorFrame($this->upstreamErrorStatus($e));
             return;
         }
+    }
+
+    /**
+     * Map a caught upstream failure to the status code carried in the SSE
+     * `error` frame.
+     *
+     * The `on_headers` callback throws only for a non-200 upstream status, so
+     * the response attached to a caught RequestException disambiguates the two
+     * failure modes:
+     *   - a non-200 response is that `on_headers` rejection -> report its real
+     *     status (404, 500, ...);
+     *   - a 200 response means headers already parsed 200 and the body
+     *     transfer dropped mid-stream -> report the 0 transfer-error sentinel,
+     *     never a self-contradictory `status: 200` inside an `error` frame.
+     * Any exception with no response (agent down / DNS / refused connection,
+     * e.g. ConnectException) is likewise a transport failure -> sentinel 0.
+     */
+    private function upstreamErrorStatus(GuzzleException $e): int
+    {
+        if ($e instanceof RequestException) {
+            $response = $e->getResponse();
+            if ($response !== null && $response->getStatusCode() !== 200) {
+                return $response->getStatusCode();
+            }
+        }
+
+        return 0;
     }
 
     private function emitErrorFrame(int $upstreamStatus): void
