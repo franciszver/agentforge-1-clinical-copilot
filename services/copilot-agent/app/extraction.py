@@ -582,3 +582,64 @@ def apply_subject_check(result: PlannerResult, *, question: str, patient_id: int
 
     scope_notice = f"I can only answer about the currently open patient (patient {patient_id})."
     return _with_answer(result, scope_notice)
+
+
+# Explicit RETARGET construction the question introduces: "switch (over) to
+# <Name>" -- a capitalized proper noun immediately following a switch/retarget
+# verb phrase. Only the verb phrase is matched case-insensitively (scoped
+# inline flag, same trick as ``_PAIRED_NAME_NUMBER_RE`` above); the name
+# capture stays case-SENSITIVE so a lowercase word after "switch to" is never
+# mistaken for a name. Deliberately narrow to this verb phrase, not a bare
+# name search -- a bare name is indistinguishable from a legitimately-named
+# provider or family member. ACCEPTED FALSE-POSITIVE TRADEOFF (same posture
+# as apply_subject_check's, above): "switch to Dr. Lee's plan" misfires,
+# because a capitalized name right after "switch to" cannot be told apart
+# from a genuine patient retarget without semantic understanding that is out
+# of scope for a deterministic guard.
+_RETARGET_NAME_RE = re.compile(
+    r"\b(?i:switch(?:ing)?\s+(?:over\s+)?to)\s+((?:[A-Z][A-Za-z'\-]*\s*){1,3})"
+)
+
+
+def detect_foreign_patient_reference(question: str, bound_patient_id: int) -> bool:
+    """Deterministic PRE-dispatch guard (#223): does ``question`` explicitly
+    reference a DIFFERENT patient than ``bound_patient_id``?
+
+    This hardens #194's ``apply_subject_check`` above, which only runs AFTER
+    ``Planner.run()`` has already dispatched tools and can merely rewrite the
+    answer TEXT. That is structurally too late to satisfy the eval suite's
+    ``must_refuse`` (the forbidden tool must NEVER dispatch) and ``no_phi``
+    (which also scans the quarantined tool-call trace, where a real record
+    value legitimately reappears once a tool actually runs) assertions.
+    Detected here, the caller (``app.chat._stream_chat``,
+    ``runner.pipeline.run_case``) short-circuits to a refusal BEFORE the
+    planner runs at all -- no tool dispatch, no model call.
+
+    Two deterministic, principled signals -- no bare-name matching (that
+    needs patient-name binding, out of scope; see #223):
+      1. An explicit foreign patient NUMBER ("patient 999", "patient #999",
+         "patient id 999") -- reuses ``_PATIENT_NUMBER_RE`` (#194's own
+         number regex) so both guards recognize identical number syntax.
+      2. An explicit "switch (over) to <Name>" retarget construction -- see
+         ``_RETARGET_NAME_RE`` for its accepted false-positive tradeoff.
+    """
+    numbers = {
+        match.group(1) for match in _PATIENT_NUMBER_RE.finditer(question) if int(match.group(1)) != bound_patient_id
+    }
+    if numbers:
+        return True
+    return _RETARGET_NAME_RE.search(question) is not None
+
+
+_CROSS_PATIENT_REFUSAL_ANSWER = (
+    "I can only answer about the patient whose chart is currently open. "
+    "Please open the other patient's chart to ask about them."
+)
+
+
+def cross_patient_refusal_result() -> PlannerResult:
+    """The refusal ``PlannerResult`` for ``detect_foreign_patient_reference``
+    (#223): empty trace, empty raw_results, empty llm_calls -- no tool was
+    ever dispatched and no model was ever called -- carrying a clean, generic
+    decline that names neither the foreign patient nor the bound one."""
+    return PlannerResult(answer=_CROSS_PATIENT_REFUSAL_ANSWER, trace=[], raw_results=[], llm_calls=[])
