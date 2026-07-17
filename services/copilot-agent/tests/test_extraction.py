@@ -707,27 +707,31 @@ def test_apply_subject_check_also_normalizes_an_answer_that_already_refuses():
 #    runs at all, so callers can short-circuit to a refusal before any tool
 #    dispatch or model call -- the only way to satisfy the eval suite's
 #    must_refuse (forbidden tool never dispatched) and no_phi (which also
-#    scans the quarantined tool-call trace) assertions. See its docstring in
-#    app.extraction for the two principled signals it recognizes: an
-#    explicit foreign patient NUMBER, or an explicit "switch (over) to
-#    <Name>" retarget construction. Deliberately no bare-name matching (needs
-#    patient-name binding, out of scope -- #223).
+#    scans the quarantined tool-call trace) assertions. The SINGLE signal is
+#    an explicit foreign patient NUMBER; name-based ("switch to <Name>")
+#    detection is deliberately OUT of scope because a bare name cannot be
+#    told apart from an ordinary clinical medication switch ("switch to
+#    Lisinopril") without knowing the bound patient's own name (the
+#    name-binding problem deferred to #224). The number match excludes
+#    dosing forms ("give patient 2 tablets") so a routine dosing question is
+#    never wrongly refused.
 # --------------------------------------------------------------------------
 
 
 def test_detect_foreign_patient_reference_true_for_an_explicit_foreign_number():
-    assert detect_foreign_patient_reference(
-        "Please look up patient 999's current medications.", 1
-    )
+    assert detect_foreign_patient_reference("Please look up patient 999's current medications.", 1)
 
 
-def test_detect_foreign_patient_reference_true_for_a_switch_to_name_retarget():
-    assert detect_foreign_patient_reference("Can you switch over to Jane Doe and check her labs?", 1)
+def test_detect_foreign_patient_reference_true_for_a_bare_foreign_number():
+    assert detect_foreign_patient_reference("patient 999", 1)
 
 
-def test_detect_foreign_patient_reference_true_for_a_bare_switch_to_name_retarget():
-    # No "over" -- the shorter "switch to <Name>" phrasing must also fire.
-    assert detect_foreign_patient_reference("Switch to Maria Alvarez for a second.", 1)
+def test_detect_foreign_patient_reference_true_for_a_hash_prefixed_foreign_number():
+    assert detect_foreign_patient_reference("Pull records for patient #999.", 1)
+
+
+def test_detect_foreign_patient_reference_true_for_a_patient_id_foreign_number():
+    assert detect_foreign_patient_reference("What about patient id 452?", 1)
 
 
 def test_detect_foreign_patient_reference_false_for_the_bound_patients_own_number():
@@ -738,11 +742,24 @@ def test_detect_foreign_patient_reference_false_for_a_plain_same_patient_questio
     assert not detect_foreign_patient_reference("What meds is he on?", 1)
 
 
-def test_detect_foreign_patient_reference_false_for_a_provider_name_without_a_retarget_verb():
-    # Naming a provider/family member is not itself a signal -- only an
-    # explicit retarget verb phrase ("switch to <Name>") or an explicit
-    # foreign patient number counts.
-    assert not detect_foreign_patient_reference("Did Dr. Lee change the dose?", 1)
+def test_detect_foreign_patient_reference_false_for_a_dosing_instruction():
+    # "give patient 2 tablets" is a DOSE instruction, not a reference to a
+    # different patient -- the number is immediately followed by a dosing
+    # noun, so the guard must NOT fire (else a routine dosing question about
+    # the bound patient would be wrongly hard-refused).
+    assert not detect_foreign_patient_reference("Give patient 2 tablets twice daily.", 1)
+
+
+def test_detect_foreign_patient_reference_false_for_a_milligram_dosing_instruction():
+    assert not detect_foreign_patient_reference("Should we give patient 5 mg or 10 mg?", 1)
+
+
+def test_detect_foreign_patient_reference_does_not_fire_on_a_name_based_retarget():
+    # Name-based detection is out of scope (#224): an ordinary clinical
+    # medication switch phrased as "switch to <Drug>" must NEVER be refused,
+    # and a name-based patient retarget is indistinguishable from it here.
+    assert not detect_foreign_patient_reference("Switch her to Lisinopril 10 mg.", 1)
+    assert not detect_foreign_patient_reference("Can you switch over to Jane Doe and check her labs?", 1)
 
 
 def test_cross_patient_refusal_result_has_no_dispatch_and_no_pii():

@@ -584,26 +584,35 @@ def apply_subject_check(result: PlannerResult, *, question: str, patient_id: int
     return _with_answer(result, scope_notice)
 
 
-# Explicit RETARGET construction the question introduces: "switch (over) to
-# <Name>" -- a capitalized proper noun immediately following a switch/retarget
-# verb phrase. Only the verb phrase is matched case-insensitively (scoped
-# inline flag, same trick as ``_PAIRED_NAME_NUMBER_RE`` above); the name
-# capture stays case-SENSITIVE so a lowercase word after "switch to" is never
-# mistaken for a name. Deliberately narrow to this verb phrase, not a bare
-# name search -- a bare name is indistinguishable from a legitimately-named
-# provider or family member. ACCEPTED FALSE-POSITIVE TRADEOFF (same posture
-# as apply_subject_check's, above): "switch to Dr. Lee's plan" misfires,
-# because a capitalized name right after "switch to" cannot be told apart
-# from a genuine patient retarget without semantic understanding that is out
-# of scope for a deterministic guard.
-_RETARGET_NAME_RE = re.compile(
-    r"\b(?i:switch(?:ing)?\s+(?:over\s+)?to)\s+((?:[A-Z][A-Za-z'\-]*\s*){1,3})"
+# Dosing/quantity nouns that turn a "patient <N>" number into a DOSE
+# instruction ("give patient 2 tablets", "patient 5 mg") rather than a
+# reference to a different patient. When one immediately follows the number,
+# the guard must NOT fire -- otherwise an ordinary dosing question about the
+# bound patient would be wrongly refused. See ``_GUARD_PATIENT_NUMBER_RE``.
+_DOSING_NOUNS = (
+    r"tablets?|tabs?|pills?|capsules?|caps?|mg|mcg|ml|g|units?|"
+    r"doses?|times|puffs?|drops?|days?|weeks?|months?"
+)
+
+# The guard's OWN foreign-patient-number pattern: identical to #194's
+# ``_PATIENT_NUMBER_RE`` but with a trailing negative lookahead so a
+# "patient <N>" whose number is immediately followed by a dosing/quantity
+# noun (a dosing instruction, not a patient reference) does NOT match. Kept
+# SEPARATE from ``_PATIENT_NUMBER_RE`` deliberately -- #194's
+# ``apply_subject_check`` runs POST-answer and only ever rewrites text, so
+# its looser number match is harmless there; this guard runs PRE-dispatch and
+# a false positive here hard-refuses a legitimate question, so it must be
+# tighter. Sharing one pattern would force #194's tests and this guard's to
+# move in lockstep for no benefit.
+_GUARD_PATIENT_NUMBER_RE = re.compile(
+    rf"\bpatient\s*(?:id\s*)?#?\s*(\d+)\b(?!\s+(?:{_DOSING_NOUNS})\b)",
+    re.IGNORECASE,
 )
 
 
 def detect_foreign_patient_reference(question: str, bound_patient_id: int) -> bool:
     """Deterministic PRE-dispatch guard (#223): does ``question`` explicitly
-    reference a DIFFERENT patient than ``bound_patient_id``?
+    reference a DIFFERENT patient than ``bound_patient_id`` by NUMBER?
 
     This hardens #194's ``apply_subject_check`` above, which only runs AFTER
     ``Planner.run()`` has already dispatched tools and can merely rewrite the
@@ -615,20 +624,20 @@ def detect_foreign_patient_reference(question: str, bound_patient_id: int) -> bo
     ``runner.pipeline.run_case``) short-circuits to a refusal BEFORE the
     planner runs at all -- no tool dispatch, no model call.
 
-    Two deterministic, principled signals -- no bare-name matching (that
-    needs patient-name binding, out of scope; see #223):
-      1. An explicit foreign patient NUMBER ("patient 999", "patient #999",
-         "patient id 999") -- reuses ``_PATIENT_NUMBER_RE`` (#194's own
-         number regex) so both guards recognize identical number syntax.
-      2. An explicit "switch (over) to <Name>" retarget construction -- see
-         ``_RETARGET_NAME_RE`` for its accepted false-positive tradeoff.
+    The single signal is an explicit foreign patient NUMBER ("patient 999",
+    "patient #999", "patient id 999") whose value differs from the bound id,
+    via ``_GUARD_PATIENT_NUMBER_RE`` (which excludes dosing forms like "give
+    patient 2 tablets"). Name-based detection ("switch to <Name>") is
+    DELIBERATELY out of scope: a bare capitalized name cannot be told apart
+    from an ordinary clinical medication switch ("switch to Lisinopril") or a
+    named provider without knowing the bound patient's own name -- the same
+    name-binding problem deferred to #224. Detecting it here would wrongly
+    refuse routine clinical questions, a worse regression than the case it
+    would fix.
     """
-    numbers = {
-        match.group(1) for match in _PATIENT_NUMBER_RE.finditer(question) if int(match.group(1)) != bound_patient_id
-    }
-    if numbers:
-        return True
-    return _RETARGET_NAME_RE.search(question) is not None
+    return any(
+        int(match.group(1)) != bound_patient_id for match in _GUARD_PATIENT_NUMBER_RE.finditer(question)
+    )
 
 
 _CROSS_PATIENT_REFUSAL_ANSWER = (

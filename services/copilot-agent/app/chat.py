@@ -702,7 +702,7 @@ def _stream_chat(
                 raise AssertionError("run_streaming ended without a terminal PlannerCompleted event")  # pragma: no cover
         else:
             result = planner.run(message)
-        assert result is not None  # every branch above sets a PlannerResult
+        assert result is not None  # mypy: the elif branch's loop widens result
         # Deterministic cross-patient subject-check (#194, follow-up to
         # #121): a small model can verbally attribute the bound patient's
         # data to a different, unqueried patient the question named/numbered

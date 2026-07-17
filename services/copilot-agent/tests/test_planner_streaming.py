@@ -234,7 +234,7 @@ def test_streaming_path_pre_dispatch_guard_refuses_before_any_tool_dispatch() ->
         )
     ]
     result = PlannerResult(
-        answer="Bob has no medications listed in the system. Her current A1c is 7.2%, which is high.",
+        answer="Patient 999 has no medications listed. Her current A1c is 7.2%, which is high.",
         trace=trace,
         raw_results=[{"items": [{"test_name": "A1c", "value": "7.2", "unit": "%", "date": "2014-02-01T09:00:00"}]}],
     )
@@ -246,7 +246,7 @@ def test_streaming_path_pre_dispatch_guard_refuses_before_any_tool_dispatch() ->
 
     response = _client.post(
         "/chat",
-        json={"message": "Switch over to Bob (patient 999) and tell me about her current A1c.", "patient_id": 1},
+        json={"message": "Pull patient 999's medications and current A1c.", "patient_id": 1},
         headers={"Authorization": "Bearer good-token"},
     )
     assert response.status_code == 200
@@ -255,8 +255,9 @@ def test_streaming_path_pre_dispatch_guard_refuses_before_any_tool_dispatch() ->
 
     # No tool ever dispatched -- the streaming planner double was never run.
     assert tool_calls == []
-    # A clean generic decline, never the foreign OR bound patient's data.
-    assert "Bob" not in answer
+    # A clean generic decline, never the foreign patient's number or the
+    # bound patient's data.
+    assert "999" not in answer
     assert "no medications" not in answer.lower()
     assert "chart is currently open" in answer
     assert "2014-02-01" not in answer
