@@ -35,7 +35,15 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from app.chat import get_claim_extractor, get_planner_factory, get_token_validator
+from app.chat import (
+    Conversation,
+    ConversationStore,
+    _default_clock,
+    _stream_chat,
+    get_claim_extractor,
+    get_planner_factory,
+    get_token_validator,
+)
 from app.main import app
 from app.planner import (
     Planner,
@@ -209,3 +217,103 @@ def test_streaming_path_still_applies_subject_check_and_recency_notice_to_answer
     # through, in order, ahead of the answer.
     assert len(tool_calls) == 1
     assert tool_calls[0]["tool"] == "get_recent_labs"
+
+
+# --- Test C: client disconnect mid-stream closes the inner run_streaming --------
+#
+# P2.12 introduces a NEW relationship: the ``_stream_chat`` generator iterates
+# the planner's ``run_streaming`` generator. A client that disconnects while
+# tool frames are still streaming closes the OUTER (``_stream_chat``) generator
+# via ``GeneratorExit``; that must (a) propagate into and close the INNER
+# ``run_streaming`` generator (no leaked generator still holding a half-run
+# tool loop), and (b) still record the request span ``ok=False`` -- the exact
+# behavior the ``except BaseException`` branch in ``_stream_chat`` is there for
+# (its comment calls a mid-stream ``GeneratorExit`` "a client disconnect").
+# The pre-P2.12 replay path had no inner generator, so this relationship is
+# new surface worth a committed regression guard.
+
+
+class _ProbeStreamingPlanner:
+    """A planner double whose ``run_streaming`` yields one ``ToolDispatched``
+    then WOULD yield a second, blocking on the caller pulling more. Its
+    ``finally`` flips ``inner_closed`` so the test can confirm the inner
+    generator was actually closed (not leaked) when the outer stream is
+    ``.close()``d mid-flight."""
+
+    def __init__(self, first_trace: ToolCallTrace, second_trace: ToolCallTrace) -> None:
+        self._first_trace = first_trace
+        self._second_trace = second_trace
+        self.inner_closed = False
+        self.reached_second_yield = False
+
+    def run_streaming(self, question: str) -> Iterable[PlannerEvent]:
+        try:
+            yield ToolDispatched(self._first_trace)
+            # If the caller keeps pulling we'd emit more; a mid-stream
+            # disconnect throws GeneratorExit at the yield above before we
+            # ever get here, so this must NOT run in the disconnect case.
+            self.reached_second_yield = True
+            yield ToolDispatched(self._second_trace)
+        finally:
+            self.inner_closed = True
+
+
+class _RequestSpanRecordingTraceStore:
+    """A minimal trace store capturing only what this test asserts: the
+    ``ok`` flag the request span was recorded with. Tool-span writes are
+    accepted and ignored (the disconnect happens before verification)."""
+
+    def __init__(self) -> None:
+        self.request_span_ok: bool | None = None
+
+    def record_tool_span(self, **kwargs: object) -> int:
+        return 0
+
+    def record_request_span(self, *, ok: bool, **kwargs: object) -> int:
+        self.request_span_ok = ok
+        return 0
+
+
+def test_client_disconnect_mid_stream_closes_inner_generator_and_records_failed_span() -> None:
+    first = ToolCallTrace(
+        tool=ToolName.GET_MEDICATIONS, args={}, result={"count": 1}, error=None, start_ts=1.0, end_ts=1.2
+    )
+    second = ToolCallTrace(
+        tool=ToolName.GET_ALLERGIES, args={}, result={"count": 0}, error=None, start_ts=1.3, end_ts=1.5
+    )
+    planner = _ProbeStreamingPlanner(first, second)
+    trace_store = _RequestSpanRecordingTraceStore()
+    conversation = Conversation(conversation_id="conv-disconnect", patient_id=1)
+    store = ConversationStore()
+
+    stream = _stream_chat(
+        planner=planner,
+        extractor=_FakeExtractor(),
+        conversation=conversation,
+        store=store,
+        trace_store=trace_store,  # type: ignore[arg-type]
+        message="What is he taking?",
+        user="unknown",
+        clock=_default_clock,
+    )
+
+    # Pull the first two frames: the ``conversation`` frame, then the first
+    # ``tool_call`` frame. The outer generator is now suspended INSIDE the
+    # ``for event in run_streaming(...)`` loop, with the inner generator
+    # itself suspended at its first ``yield``.
+    assert "event: conversation" in next(stream)
+    assert "event: tool_call" in next(stream)
+    assert planner.inner_closed is False  # inner still live, mid-loop
+
+    # Simulate the client disconnecting: closing the outer generator raises
+    # GeneratorExit at the suspended yield, exactly as Starlette's streaming
+    # response does when the client goes away.
+    stream.close()
+
+    # (a) The inner run_streaming generator was closed -- its finally ran and
+    # it never advanced to the second yield (no leaked half-run tool loop).
+    assert planner.inner_closed is True
+    assert planner.reached_second_yield is False
+    # (b) The request span was recorded ok=False (the load-bearing
+    # ``except BaseException`` -> ``request_ok=False`` -> finally behavior).
+    assert trace_store.request_span_ok is False

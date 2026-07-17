@@ -667,7 +667,7 @@ def _stream_chat(
                 elif isinstance(event, PlannerCompleted):
                     result = event.result
             if result is None:
-                raise AssertionError("run_streaming ended without a terminal PlannerCompleted event")
+                raise AssertionError("run_streaming ended without a terminal PlannerCompleted event")  # pragma: no cover
         else:
             result = planner.run(message)
         # Deterministic cross-patient subject-check (#194, follow-up to
