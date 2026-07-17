@@ -661,8 +661,22 @@ def cross_patient_refusal_result() -> PlannerResult:
 # of the same ambiguity (see ``clarify_unresolvable_referent``). Deliberately
 # scoped to the medication domain only -- "that test"/"this diagnosis" are a
 # different ambiguity class, out of scope here. Case-insensitive.
+#
+# COMPOUND-CONCEPT EXCLUSION (negative lookahead): the medication noun must
+# NOT be immediately followed by a word that turns it into a compound clinical
+# CONCEPT rather than a standalone unresolved referent -- e.g. "that drug
+# interaction between metformin and iodinated contrast", "this drug class",
+# "that drug-drug interaction between X and Y", "that drug allergy". These
+# name drugs and mean a concept ("drug interaction", "drug allergy"); firing
+# on them and asking "which medication do you mean?" is a UX regression. The
+# ``(?:-\w+)?`` allows the hyphenated "drug-drug" compound before the concept
+# noun. "safe", "used", "still", "yet" etc. are deliberately NOT excluded, so
+# a genuinely ambiguous "is that drug safe with her allergy?" still fires.
 _UNRESOLVABLE_MEDICATION_REFERENT_RE = re.compile(
-    r"\b(?:that|this)\s+(?:new\s+)?(?:medication|med|drug|prescription)\b", re.IGNORECASE
+    r"\b(?:that|this)\s+(?:new\s+)?(?:medication|med|drug|prescription)\b"
+    r"(?!(?:-\w+)?\s+(?:interactions?|class(?:es)?|allerg(?:y|ies)|levels?|"
+    r"combinations?|regimens?|reconciliation|between)\b)",
+    re.IGNORECASE,
 )
 
 _CLARIFY_UNRESOLVABLE_REFERENT_ANSWER = (
@@ -686,7 +700,11 @@ def clarify_unresolvable_referent(
       1. ``question`` contains an unresolvable demonstrative medication
          reference via ``_UNRESOLVABLE_MEDICATION_REFERENT_RE`` -- "that/this
          [new] medication/med/drug/prescription". General pattern, not the
-         literal fixture phrase -- matches any equivalent real phrasing.
+         literal fixture phrase -- matches any equivalent real phrasing. Its
+         negative lookahead EXCLUDES compound clinical concepts where the
+         same words name a concept rather than an unresolved referent ("that
+         drug interaction between X and Y", "this drug class", "that drug
+         allergy") -- see the pattern's own comment.
       2. ``has_prior_turns`` is ``False`` -- this is the FIRST turn of the
          conversation, so no earlier turn could have already named the
          medication the demonstrative now points back to.

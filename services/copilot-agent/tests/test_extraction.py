@@ -865,3 +865,41 @@ def test_clarify_unresolvable_referent_does_not_false_positive_on_unrelated_demo
     )
 
     assert updated is result
+
+
+def test_clarify_unresolvable_referent_does_not_false_positive_on_compound_concept():
+    # Regression (gate finding): the words "that drug interaction" /
+    # "that drug-drug interaction" form a compound clinical CONCEPT and name
+    # the drugs -- they are NOT an unresolved medication referent. The
+    # negative lookahead excludes the compound-concept marker ("interaction",
+    # etc.) so the answer is preserved, not discarded with a "which
+    # medication?" clarification. Principled compound-noun exclusion, not a
+    # fixture match.
+    for question in [
+        "Tell me about that drug interaction between metformin and iodinated contrast.",
+        "Is that drug-drug interaction between lisinopril and ibuprofen clinically significant?",
+        "What is this drug class?",
+        "Does she have that drug allergy documented?",
+    ]:
+        result = _planner_result(
+            "A meaningful clinical answer about the named concept.",
+            ToolName.GET_MEDICATIONS,
+            {"items": []},
+        )
+        updated = clarify_unresolvable_referent(result, question=question, has_prior_turns=False)
+        assert updated is result, f"expected NO override (compound concept) for: {question!r}"
+
+
+def test_clarify_unresolvable_referent_still_fires_when_noun_is_a_standalone_referent():
+    # The compound-concept exclusion must NOT over-fire: a word that is not a
+    # compound-concept marker ("safe") still leaves a genuinely ambiguous
+    # standalone referent, which must still be caught.
+    result = _planner_result("Yes.", ToolName.GET_MEDICATIONS, {"items": []})
+
+    updated = clarify_unresolvable_referent(
+        result,
+        question="Is that drug safe with her allergy?",
+        has_prior_turns=False,
+    )
+
+    assert updated is not result
