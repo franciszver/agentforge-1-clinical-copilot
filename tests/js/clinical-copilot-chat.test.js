@@ -924,3 +924,89 @@ describe('createChatController staged thinking indicator (#208)', () => {
         expect(messagesEl.textContent).toBe('');
     });
 });
+
+// ---------------------------------------------------------------------------
+// createChatController — #208 reasoning fallback timer (direct coverage)
+//
+// The dev stack batches the whole SSE stream at the end of the wait (see the
+// createThinkingIndicator docstring), so the 1.5s fallback timer -- not frame
+// arrival -- is what actually delivers the "Reasoning locally..." stage
+// through the long gap. It is the load-bearing mechanism and gets direct
+// coverage here via jest.useFakeTimers(): one test proves the timer fires and
+// flips the stage on its own; one proves stopThinking()'s clearTimeout
+// prevents a late mutation after an exit (removing that clearTimeout must turn
+// the second test red).
+// ---------------------------------------------------------------------------
+describe('createChatController reasoning fallback timer (#208)', () => {
+    // THINKING_REASONING_FALLBACK_MS in copilot-chat.js -- the module keeps it
+    // private, so the timing is mirrored here (kept in sync with the source).
+    const FALLBACK_MS = 1500;
+
+    afterEach(() => {
+        jest.useRealTimers();
+        document.body.innerHTML = '';
+    });
+
+    function makeController(fetchImpl) {
+        const messagesEl = document.createElement('div');
+        document.body.appendChild(messagesEl);
+        return {
+            messagesEl: messagesEl,
+            controller: createChatController({
+                messagesEl: messagesEl,
+                formEl: document.createElement('form'),
+                inputEl: document.createElement('textarea'),
+                context: { csrfToken: 'csrf' },
+                brokerUrl: 'https://host/base/ajax.php',
+                proxyUrl: 'https://host/base/chat-proxy.php',
+                feedbackUrl: 'https://host/base/feedback-proxy.php',
+                authorizeUrl: 'https://host/base/oauth-authorize.php',
+                fetchImpl: fetchImpl
+            })
+        };
+    }
+
+    test('the fallback timer alone advances consulting -> reasoning (no tool_call frame needed)', () => {
+        jest.useFakeTimers();
+        // The request never resolves -- so the ONLY thing that can advance the
+        // stage is the timer, proving it is wired and fires.
+        const fetchImpl = jest.fn(() => new Promise(() => {}));
+        const { messagesEl, controller } = makeController(fetchImpl);
+
+        controller.sendMessage('What meds is she on?');
+
+        const indicator = messagesEl.querySelector('.copilot-thinking');
+        expect(indicator.textContent).toContain('Consulting the chart');
+
+        jest.advanceTimersByTime(FALLBACK_MS);
+
+        expect(indicator.textContent).toContain('Reasoning locally');
+    });
+
+    test('reset() mid-flight clears the timer so it cannot mutate the stage afterwards', () => {
+        jest.useFakeTimers();
+        const fetchImpl = jest.fn(() => new Promise(() => {}));
+        const { messagesEl, controller } = makeController(fetchImpl);
+
+        controller.sendMessage('What meds is she on?');
+
+        // Hold a reference to the status node BEFORE reset detaches it -- the
+        // fallback timer's callback closes over this same element, so if the
+        // timer is not cleared it will still flip this node's text even after
+        // it has been removed from the DOM.
+        const status = messagesEl.querySelector('.copilot-thinking-status');
+        expect(status.textContent).toContain('Consulting the chart');
+
+        // Exit mid-flight, BEFORE the fallback fires.
+        controller.reset();
+        expect(messagesEl.querySelector('.copilot-thinking')).toBeNull();
+
+        jest.advanceTimersByTime(FALLBACK_MS);
+
+        // With stopThinking()'s clearTimeout in place the callback never runs,
+        // so the detached node's text is unchanged. Remove that clearTimeout
+        // and the timer fires setStage('reasoning') on this node -> red.
+        expect(status.textContent).not.toContain('Reasoning locally');
+        expect(status.textContent).toContain('Consulting the chart');
+    });
+});
