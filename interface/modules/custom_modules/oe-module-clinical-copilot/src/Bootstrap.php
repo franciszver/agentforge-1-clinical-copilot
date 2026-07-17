@@ -19,7 +19,6 @@ use OpenEMR\Events\Main\Tabs\RenderEvent;
 use OpenEMR\Events\PatientDemographics\RenderEvent as PatientDemographicsRenderEvent;
 use OpenEMR\Events\UserInterface\PageHeadingRenderEvent;
 use OpenEMR\Modules\ClinicalCopilot\Controller\CopilotPanelController;
-use OpenEMR\Modules\ClinicalCopilot\Controller\CopilotStandaloneController;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 
 class Bootstrap
@@ -134,6 +133,16 @@ class Bootstrap
      * without any DOM collision -- and copilot.js's existing toggle wiring
      * (which queries those ids) works here unmodified.
      *
+     * The launcher always renders the real chat panel, never a patient-gated
+     * empty-state baked in at render time: main.php is a long-lived SPA shell
+     * whose own document never reloads when the user selects a patient (only
+     * the content iframe navigates), so any has-patient decision made here
+     * would be frozen at login (no patient) forever. Instead the chat binds
+     * to the *current* patient at send time -- ChatProxyController reads the
+     * pid from the session per request, never from client input -- and
+     * cleanly answers "open a patient chart first" when none is selected
+     * (see copilot-chat.js's no_patient_in_session handling).
+     *
      * @param RenderEvent $event
      * @return void
      */
@@ -142,16 +151,7 @@ class Bootstrap
         $controller = new CopilotPanelController();
         echo $this->renderAssetsOnce($controller);
         echo '<div class="copilot-global-launcher">';
-        if (CopilotStandaloneController::hasPatientContext(PatientSessionUtil::getPid())) {
-            echo $controller->renderOpenChatButton();
-        } else {
-            // No patient in session on this page: still show the button
-            // (so Co-Pilot is discoverable), but the panel it opens is the
-            // honest empty state rather than a chat form with nothing to
-            // talk about.
-            echo $controller->renderOpenChatButtonElement();
-            echo $controller->renderEmptyStatePanel();
-        }
+        echo $controller->renderOpenChatButton();
         echo '</div>';
     }
 

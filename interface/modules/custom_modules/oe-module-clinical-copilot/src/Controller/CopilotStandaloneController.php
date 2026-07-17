@@ -81,7 +81,7 @@ final class CopilotStandaloneController
             <?php echo $this->panel->renderChatPanel(true); ?>
         <?php } else { ?>
     <div id="copilot-standalone-empty-state" class="copilot-standalone-empty-state">
-            <?php echo $this->panel->renderEmptyState(); ?>
+        <p><?php echo xlt('Open a patient chart first to start a Co-Pilot conversation.'); ?></p>
     </div>
         <?php } ?>
 <script>

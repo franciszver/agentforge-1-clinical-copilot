@@ -65,13 +65,6 @@
     background: var(--white, #fff);
 }
 
-.copilot-panel-empty-state {
-    padding: 1rem;
-    color: #495057;
-    font-size: 0.9rem;
-    text-align: center;
-}
-
 .copilot-chat-panel {
     position: fixed;
     right: 1rem;
