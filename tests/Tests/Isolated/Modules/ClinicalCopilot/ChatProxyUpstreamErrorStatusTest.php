@@ -111,7 +111,10 @@ class ChatProxyUpstreamErrorStatusTest extends TestCase
     private function decide(GuzzleException $exception): int
     {
         $method = new \ReflectionMethod(ChatProxyController::class, 'upstreamErrorStatus');
+        $status = $method->invoke(new ChatProxyController(), $exception);
 
-        return $method->invoke(new ChatProxyController(), $exception);
+        self::assertIsInt($status);
+
+        return $status;
     }
 }
