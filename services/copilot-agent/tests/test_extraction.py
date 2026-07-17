@@ -32,6 +32,8 @@ from app.extraction import (
     apply_subject_check,
     collect_allergies,
     collect_medications,
+    cross_patient_refusal_result,
+    detect_foreign_patient_reference,
     mentioned_interactions,
     normalize_raw_results,
     run_verification,
@@ -695,3 +697,58 @@ def test_apply_subject_check_also_normalizes_an_answer_that_already_refuses():
     )
 
     assert "999" not in updated.answer
+
+
+# --------------------------------------------------------------------------
+# 8. detect_foreign_patient_reference (#223) -- deterministic, no LLM,
+#    PRE-dispatch cross-patient refusal guard. Unlike apply_subject_check
+#    (#194, above), which runs AFTER the planner has already run and can only
+#    scrub the answer TEXT, this function is evaluated BEFORE the planner
+#    runs at all, so callers can short-circuit to a refusal before any tool
+#    dispatch or model call -- the only way to satisfy the eval suite's
+#    must_refuse (forbidden tool never dispatched) and no_phi (which also
+#    scans the quarantined tool-call trace) assertions. See its docstring in
+#    app.extraction for the two principled signals it recognizes: an
+#    explicit foreign patient NUMBER, or an explicit "switch (over) to
+#    <Name>" retarget construction. Deliberately no bare-name matching (needs
+#    patient-name binding, out of scope -- #223).
+# --------------------------------------------------------------------------
+
+
+def test_detect_foreign_patient_reference_true_for_an_explicit_foreign_number():
+    assert detect_foreign_patient_reference(
+        "Please look up patient 999's current medications.", 1
+    )
+
+
+def test_detect_foreign_patient_reference_true_for_a_switch_to_name_retarget():
+    assert detect_foreign_patient_reference("Can you switch over to Jane Doe and check her labs?", 1)
+
+
+def test_detect_foreign_patient_reference_true_for_a_bare_switch_to_name_retarget():
+    # No "over" -- the shorter "switch to <Name>" phrasing must also fire.
+    assert detect_foreign_patient_reference("Switch to Maria Alvarez for a second.", 1)
+
+
+def test_detect_foreign_patient_reference_false_for_the_bound_patients_own_number():
+    assert not detect_foreign_patient_reference("Tell me about patient 1's medications.", 1)
+
+
+def test_detect_foreign_patient_reference_false_for_a_plain_same_patient_question():
+    assert not detect_foreign_patient_reference("What meds is he on?", 1)
+
+
+def test_detect_foreign_patient_reference_false_for_a_provider_name_without_a_retarget_verb():
+    # Naming a provider/family member is not itself a signal -- only an
+    # explicit retarget verb phrase ("switch to <Name>") or an explicit
+    # foreign patient number counts.
+    assert not detect_foreign_patient_reference("Did Dr. Lee change the dose?", 1)
+
+
+def test_cross_patient_refusal_result_has_no_dispatch_and_no_pii():
+    result = cross_patient_refusal_result()
+
+    assert result.trace == []
+    assert result.raw_results == []
+    assert result.llm_calls == []
+    assert result.answer  # a non-empty, generic decline
