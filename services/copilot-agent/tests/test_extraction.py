@@ -908,10 +908,13 @@ def test_detect_foreign_patient_reference_false_when_roster_provider_returns_emp
 
 
 def test_detect_foreign_patient_reference_roster_match_is_case_insensitive():
+    # The captured name itself is properly capitalized (a real name, as
+    # typed) -- the roster ENTRY is deliberately lowercase here, to prove the
+    # comparison ignores case rather than requiring an exact-case match.
     assert detect_foreign_patient_reference(
-        "Switch over to bob smith and tell me his drug allergies.",
+        "Switch over to Bob Smith and tell me his drug allergies.",
         1,
-        roster_provider=_roster(["Bob Smith"]),
+        roster_provider=_roster(["bob smith"]),
     )
 
 
