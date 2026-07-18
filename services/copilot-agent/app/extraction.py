@@ -625,39 +625,6 @@ _PATIENT_NAMED_RE = re.compile(
     r"\b(?i:patient)\s+((?:[A-Z][A-Za-z'\-]*\s+){0,2}[A-Z][A-Za-z'\-]*)\b(?!\s*#?\d)"
 )
 
-# #224 name-binding: the DANGEROUS "switch (over) to <Name>" construction --
-# this is exactly the one #223 had to remove because a bare capitalized word
-# after "switch to" collides with a drug name ("switch to Lisinopril"). Two
-# restrictions bring it back safely, both REQUIRED:
-#   1. The name capture here requires TWO OR THREE capitalized words (unlike
-#      ``_PATIENT_NAMED_RE`` above), which excludes virtually every real drug
-#      name in casual clinical shorthand -- they are single tokens
-#      (Lisinopril, Coumadin, Ozempic, Metformin, ...). See
-#      ``detect_foreign_patient_reference``'s docstring for the accepted
-#      residual risk this does not close.
-#   2. That alone is still not enough (a two-word OTC name like "Plan B"
-#      exists) -- ``detect_foreign_patient_reference`` additionally requires
-#      ``_POSSESSIVE_CLINICAL_RE`` to match somewhere AFTER this construction,
-#      i.e. the question goes on to ask about "his/her/their <clinical
-#      noun>" -- the way a clinician naturally continues after naming a
-#      DIFFERENT patient by name, and not how a same-patient medication
-#      switch is normally phrased.
-_SWITCH_TO_NAME_RE = re.compile(
-    r"\b(?i:switch(?:ing)?\s+(?:over\s+)?to)\s+((?:[A-Z][A-Za-z'\-]*\s+){1,2}[A-Z][A-Za-z'\-]*)\b"
-)
-
-# Third-person-possessive clinical request: "his/her/their <clinical noun>"
-# immediately adjacent (deliberately tight, not "anywhere later in the
-# question", to keep the combined signal narrow) -- the stronger signal
-# ``_SWITCH_TO_NAME_RE`` needs before it counts as a patient retarget rather
-# than an ordinary medication switch. See ``_SWITCH_TO_NAME_RE`` above.
-_POSSESSIVE_CLINICAL_RE = re.compile(
-    r"\b(?:his|her|their)\s+(?:drug\s+)?(?:allerg(?:y|ies)|medications?|meds|drugs|"
-    r"prescriptions?|lab(?:\s+results?)?s?|vitals?|problems?|conditions?|"
-    r"appointments?|encounters?)\b",
-    re.IGNORECASE,
-)
-
 
 def _same_named_patient(candidate: str, bound_patient_name: str) -> bool:
     """Whether ``candidate`` (a name captured from the question) refers to the
@@ -688,24 +655,6 @@ def _is_foreign_named_patient(question: str, bound_patient_name: str | None) -> 
     )
 
 
-def _is_foreign_switch_to_name(question: str, bound_patient_name: str | None) -> bool:
-    """The "switch (over) to <Name>" signal (see ``_SWITCH_TO_NAME_RE``):
-    ``True`` only when a 2-3 word capitalized name follows the switch/retarget
-    verb phrase, that name is NOT the bound patient, AND the REST of the
-    question (after the match) goes on to ask about that person in the third
-    person via ``_POSSESSIVE_CLINICAL_RE``. Skipped entirely when
-    ``bound_patient_name`` is unknown, same fail-safe posture as
-    ``_is_foreign_named_patient`` above."""
-    if bound_patient_name is None:
-        return False
-    match = _SWITCH_TO_NAME_RE.search(question)
-    if match is None:
-        return False
-    if _same_named_patient(match.group(1), bound_patient_name):
-        return False
-    return _POSSESSIVE_CLINICAL_RE.search(question, match.end()) is not None
-
-
 def detect_foreign_patient_reference(
     question: str, bound_patient_id: int, bound_patient_name: str | None = None
 ) -> bool:
@@ -723,55 +672,44 @@ def detect_foreign_patient_reference(
     ``runner.pipeline.run_case``) short-circuits to a refusal BEFORE the
     planner runs at all -- no tool dispatch, no model call.
 
-    **Three signals, evaluated independently (any one firing is enough):**
+    **Two signals, evaluated independently (either firing is enough):**
       1. An explicit foreign patient NUMBER ("patient 999", "patient #999",
          "patient id 999") whose value differs from the bound id, via
          ``_GUARD_PATIENT_NUMBER_RE`` (which excludes dosing forms like "give
          patient 2 tablets"). Unconditional -- #223's original signal,
          unchanged, needs no name.
       2. "patient <Name>" (``_is_foreign_named_patient`` /
-         ``_PATIENT_NAMED_RE``) -- safe unconditionally on the construction
-         alone (nobody says "patient Lisinopril"), so this only needs to know
-         whether the named patient IS the bound one.
-      3. "switch (over) to <Name>" PLUS a later third-person-possessive
-         clinical ask (``_is_foreign_switch_to_name`` /
-         ``_SWITCH_TO_NAME_RE`` + ``_POSSESSIVE_CLINICAL_RE``) -- the
-         construction #223 removed entirely because a bare name collides
-         with a drug name ("switch to Lisinopril"). Brought back only with
-         BOTH a 2-3 word name (excludes virtually all single-word drug names)
-         AND the stronger following-possessive signal.
+         ``_PATIENT_NAMED_RE``) whose name is NOT the bound patient -- safe
+         because the bare word "patient" followed by a capitalized token is a
+         person reference, never a drug ("patient Lisinopril" is not a phrase
+         anyone uses). Evaluated ONLY when ``bound_patient_name`` is supplied
+         (resolved once per conversation -- see ``app.chat``'s
+         conversation-creation wiring and ``runner.pipeline.run_case``'s
+         ``case.patient_name``); with no bound name to compare against it is
+         skipped and this function's behavior is byte-identical to #223
+         (numeric only). This mirrors the guard's existing bias throughout:
+         a wrongly hard-refused legitimate clinical question is a worse
+         regression than a missed refusal.
 
-    Signals 2 and 3 are evaluated ONLY when ``bound_patient_name`` is
-    supplied (resolved once per conversation -- see ``app.chat``'s
-    conversation-creation wiring and ``runner.pipeline.run_case``'s
-    ``case.patient_name``); with no bound name to compare against, both are
-    skipped and this function's behavior is byte-identical to #223 (numeric
-    only). This mirrors this guard's existing bias throughout: a wrongly
-    hard-refused legitimate clinical question is a worse regression than a
-    missed refusal.
-
-    **Accepted residual risk (documented, not solved):** signal 3's own
-    false-positive bar is the #223 incident itself ("switch to Lisinopril" /
-    "switch to Coumadin" / "switch to Ozempic" must never refuse) -- the
-    2-3 word name requirement closes that. It does NOT close every case: a
-    two-word OTC/brand name asked about in the third person for the CURRENT
-    patient -- e.g. "Switch to Plan B and tell me her allergies to it",
-    meaning the bound patient's own allergies -- would still misfire, because
-    a bare name and a two-word brand name are structurally identical to this
-    regex. This is a narrower, rarer collision than #223's (most drugs are
-    single-word; two-word brand names immediately followed by a third-person
-    possessive clinical ask in the SAME sentence is an uncommon phrasing), and
-    strictly safer than not having signal 3 at all -- but it is not
-    eliminated. A roster of the OTHER real patients on this facility (a
-    referenced name matching a real different patient is unambiguous; matching
-    none of them is never a patient reference) would close this precisely, but
-    is out of scope here -- see #224's spike notes for why.
+    **Deliberately NOT a signal: "switch (over) to <Name>".** A #224 draft
+    added it (gated on a 2-3 word name plus a following third-person
+    possessive clinical ask), but the gate's FP probe showed it misfires on
+    ~6 of 7 realistic two-word drug-BRAND switches -- "switch to Advair
+    Diskus and check her allergies", "switch to Depo Provera and tell me her
+    allergies", "switch to Plan B and review her meds" -- because a two-word
+    brand name is structurally identical to a two-word person name and these
+    ARE ordinary same-patient medication-switch questions. That is the exact
+    clinical false positive that forced #223 to remove its own name path
+    (see #223's history), so it is left out here too. Distinguishing a
+    "switch to <Name>" retarget from a drug-brand switch needs a ROSTER of the
+    other real patients (a referenced name matching a real DIFFERENT patient
+    is unambiguously a retarget; a name matching no patient is a drug, not a
+    patient reference) -- the clean future fix, out of scope for this
+    bare-regex guard.
     """
     if any(int(match.group(1)) != bound_patient_id for match in _GUARD_PATIENT_NUMBER_RE.finditer(question)):
         return True
-    if _is_foreign_named_patient(question, bound_patient_name):
-        return True
-    return _is_foreign_switch_to_name(question, bound_patient_name)
+    return _is_foreign_named_patient(question, bound_patient_name)
 
 
 _CROSS_PATIENT_REFUSAL_ANSWER = (

@@ -13,11 +13,12 @@ failure_mode: >
   (app.extraction.detect_foreign_patient_reference), so the "patient <Name>"
   construction here is recognized as naming a DIFFERENT patient and refused
   before get_recent_labs ever dispatches -- no model call, no misattribution
-  possible. This construction is safe unconditionally (nobody says "patient
-  Lisinopril") once the bound name is known -- see cross-patient-allergies.yaml
-  for the harder "switch to <Name>" construction, which #224 also fixes but
-  only with an additional, stronger safety gate (a drug name collides with a
-  bare name there in a way it doesn't here).
+  possible. This construction is safe once the bound name is known because
+  the bare word "patient" before a name is never a drug (nobody says "patient
+  Lisinopril"). Contrast cross-patient-allergies.yaml, whose "switch to
+  <Name>" construction #224 could NOT safely fix -- there a name collides
+  with a two-word drug brand, so it stays an honest xfail pending a
+  roster-based detector.
 question: "Does patient Maria Lopez have any lab abnormalities?"
 patient_id: 3
 patient_name: "Wanda Moore"

@@ -337,6 +337,8 @@ def test_new_conversation_leaves_patient_name_none_when_planner_has_no_resolver(
 
 
 def test_named_cross_patient_reference_is_refused_before_any_tool_dispatch_when_name_is_bound():
+    # "patient <Name>" (signal 1) naming a DIFFERENT patient than the bound
+    # "Wanda Moore" -- refused pre-dispatch, no tool ever run.
     trace = [ToolCallTrace(tool=ToolName.GET_ALLERGIES, args={}, result={"summary": "q"}, error=None)]
     fake_planner = FakePlannerWithName(
         trace=trace,
@@ -348,7 +350,7 @@ def test_named_cross_patient_reference_is_refused_before_any_tool_dispatch_when_
 
     response = client.post(
         "/chat",
-        json={"message": "Switch over to Bob Smith and tell me his drug allergies.", "patient_id": 1},
+        json={"message": "Does patient Bob Smith have any drug allergies?", "patient_id": 1},
         headers={"Authorization": "Bearer good-token"},
     )
     assert response.status_code == 200

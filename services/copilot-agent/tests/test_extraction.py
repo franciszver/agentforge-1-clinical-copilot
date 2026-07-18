@@ -764,25 +764,25 @@ def test_detect_foreign_patient_reference_does_not_fire_on_a_name_based_retarget
 
 
 # --------------------------------------------------------------------------
-# 8b. detect_foreign_patient_reference NAME-based signals (#224 name-binding).
+# 8b. detect_foreign_patient_reference NAME-based signal (#224 name-binding).
 #
-# Two principled, general constructions, ONLY evaluated once the caller
+# ONE principled, general construction, evaluated only once the caller
 # supplies the bound patient's own name (``bound_patient_name``) -- with no
-# bound name, both signals are skipped entirely and behavior is byte-identical
-# to #223 (see the tests above, which pass no third argument and must keep
-# passing unchanged):
+# bound name it is skipped entirely and behavior is byte-identical to #223
+# (see the tests above, which pass no third argument and must keep passing
+# unchanged):
 #
-#   1. "patient <Name>" -- nobody says "patient Lisinopril", so this
-#      construction is safely treated as a genuine patient reference
-#      regardless of roster access; it is foreign whenever <Name> differs
-#      from the bound patient's own name.
-#   2. "switch (over) to <Name>" -- the dangerous construction (drug names
-#      collide), so it additionally REQUIRES a 2-3 word capitalized name
-#      (excludes virtually all single-word drug names: Lisinopril, Coumadin,
-#      Ozempic, Metformin, ...) AND a later third-person-possessive clinical
-#      request ("his/her/their <allergies/meds/labs/...>") -- never a bare
-#      name. This is the #223 gate's exact false-positive bar, re-verified
-#      below with the bound name now known.
+#   "patient <Name>" -- the bare word "patient" followed by a capitalized
+#   token is a PERSON reference, never a drug ("patient Lisinopril" is not a
+#   phrase anyone uses), so it is safely treated as a genuine patient
+#   reference regardless of roster access; it is foreign whenever <Name>
+#   differs from the bound patient's own name.
+#
+# A "switch (over) to <Name>" signal was DELIBERATELY NOT added: the #224
+# gate's FP probe showed it misfires on ~6/7 realistic two-word drug-BRAND
+# switches ("switch to Advair Diskus and check her allergies", ...) -- the
+# exact clinical false positive that forced #223 to drop its own name path.
+# The tests below re-verify those "switch to <drug>" phrasings never fire.
 # --------------------------------------------------------------------------
 
 
@@ -804,45 +804,30 @@ def test_detect_foreign_patient_reference_false_for_the_bound_patients_own_first
     assert not detect_foreign_patient_reference("Does patient Wanda have any allergies?", 3, "Wanda Moore")
 
 
-def test_detect_foreign_patient_reference_true_for_switch_to_name_with_possessive_clinical_followup():
-    assert detect_foreign_patient_reference(
-        "Switch over to Bob Smith and tell me his drug allergies.", 1, "Wanda Moore"
-    )
-
-
-def test_detect_foreign_patient_reference_false_for_switch_to_the_bound_patients_own_name():
-    assert not detect_foreign_patient_reference(
-        "Switch to Wanda Moore and tell me her allergies.", 1, "Wanda Moore"
-    )
-
-
-def test_detect_foreign_patient_reference_false_for_switch_to_name_without_a_possessive_clinical_followup():
-    # "switch to <Name>" alone, with no following his/her/their <clinical
-    # noun>, is not enough on its own -- e.g. a provider name with no
-    # clinical ask attached.
-    assert not detect_foreign_patient_reference("Switch over to Jane Doe for a second.", 1, "Wanda Moore")
-
-
-def test_detect_foreign_patient_reference_named_signals_are_skipped_when_bound_name_is_unknown():
-    # Fail-safe: without a resolved bound name, neither new signal fires --
+def test_detect_foreign_patient_reference_named_signal_is_skipped_when_bound_name_is_unknown():
+    # Fail-safe: without a resolved bound name, the named signal never fires --
     # identical behavior to pre-#224 (#223 numeric-only).
     assert not detect_foreign_patient_reference("Does patient Maria Lopez have any lab abnormalities?", 3)
-    assert not detect_foreign_patient_reference("Switch over to Bob Smith and tell me his drug allergies.", 1)
 
 
 # The #223 false-positive bar, re-verified with a bound name now KNOWN and
 # PASSED -- name-binding being active must never resurrect the clinical
-# med-switch false positive that #223 itself had to walk back.
-def test_detect_foreign_patient_reference_still_false_for_bare_medication_switches_with_bound_name_known():
+# med-switch false positive that #223 itself had to walk back. The two-word
+# drug-BRAND cases ("switch to Advair Diskus ...") are why the "switch to
+# <Name>" construction was deliberately NOT added as a signal (see the
+# section comment above): they are ordinary same-patient medication switches.
+def test_detect_foreign_patient_reference_still_false_for_medication_switches_with_bound_name_known():
     assert not detect_foreign_patient_reference("Switch to Lisinopril.", 1, "Wanda Moore")
     assert not detect_foreign_patient_reference("Switch to Metformin.", 1, "Wanda Moore")
     assert not detect_foreign_patient_reference("Switch to Plan B.", 1, "Wanda Moore")
     assert not detect_foreign_patient_reference("Switch to extended-release.", 1, "Wanda Moore")
+    assert not detect_foreign_patient_reference("Switch to Advair Diskus and check her allergies.", 1, "Wanda Moore")
+    assert not detect_foreign_patient_reference("Switch to Depo Provera and tell me her allergies.", 1, "Wanda Moore")
 
 
 def test_detect_foreign_patient_reference_false_when_question_only_names_the_bound_patient_directly():
-    # No "patient" keyword, no "switch to" phrase -- just naming the
-    # currently-open patient directly -- never a signal on its own.
+    # No "patient" keyword -- just naming the currently-open patient directly
+    # -- never a signal on its own.
     assert not detect_foreign_patient_reference("Does Wanda Moore have any allergies?", 1, "Wanda Moore")
 
 
