@@ -931,6 +931,60 @@ def test_detect_foreign_patient_reference_partial_first_name_match_on_roster_is_
     )
 
 
+# --- possessive suffix (#237 gate finding): "switch to Bob Smith's chart"
+#     must strip the trailing 's before BOTH the bound-name and roster
+#     comparisons. The ASCII apostrophe is inside _SWITCH_TO_NAME_RE's
+#     trailing char class, so without stripping, the captured candidate is
+#     "Bob Smith's" -- which fails the exact roster match against "Bob
+#     Smith" and silently bypasses the refusal (a #121-style misattribution
+#     recurrence via the most keyboard-natural phrasing there is). ----------
+
+
+def test_detect_foreign_patient_reference_true_for_a_possessive_switch_to_roster_name():
+    # The gate's exact repro: ASCII apostrophe possessive, roster match.
+    assert detect_foreign_patient_reference(
+        "Switch over to Bob Smith's chart and check his allergies.",
+        1,
+        roster_provider=_roster(["Bob Smith"]),
+    )
+
+
+def test_detect_foreign_patient_reference_true_for_a_curly_apostrophe_possessive_switch_to_roster_name():
+    # U+2019 (what smart-quote autocorrect produces). The curly apostrophe is
+    # NOT in the regex's char class so the capture already ends at "Smith" --
+    # pinned as a regression test so the two apostrophe forms never diverge.
+    assert detect_foreign_patient_reference(
+        "Switch over to Bob Smith’s chart and check his allergies.",
+        1,
+        roster_provider=_roster(["Bob Smith"]),
+    )
+
+
+def test_detect_foreign_patient_reference_false_for_the_bound_patients_own_possessive_switch_to():
+    # Consistency: the bound patient's own name in possessive form must be
+    # recognized as the BOUND patient -- no refusal, and no pointless roster
+    # round trip either (the candidate is resolved as bound BEFORE the
+    # roster is consulted).
+    provider = _counting_roster(["Bob Smith"])
+    assert not detect_foreign_patient_reference(
+        "Switch to Wanda Moore's chart and check her allergies.",
+        3,
+        "Wanda Moore",
+        roster_provider=provider,
+    )
+    assert provider.calls == []  # type: ignore[attr-defined]
+
+
+def test_detect_foreign_patient_reference_false_for_a_possessive_drug_brand_switch():
+    # FP guard: a drug-brand phrase with a trailing possessive strips to a
+    # candidate that is still not on the roster -- no refusal.
+    assert not detect_foreign_patient_reference(
+        "Switch to Advair Diskus's dosing and check her allergies.",
+        1,
+        roster_provider=_roster(["Bob Smith", "Maria Lopez"]),
+    )
+
+
 # --- the #223/#224 FP battery, re-verified WITH a roster present (the
 #     harder bar than section 8b's "no roster" re-verification above) ------
 
