@@ -609,10 +609,109 @@ _GUARD_PATIENT_NUMBER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# #224 name-binding: a NAME the question introduces via "patient <Name>" --
+# up to three capitalized words. Nobody says "patient Lisinopril" (a lowercase
+# clinical shorthand almost never follows the bare word "patient" the way a
+# person's name does), so this construction is treated as a genuine patient
+# reference UNCONDITIONALLY -- the only question is whether the named patient
+# is the BOUND one or a foreign one (``_is_foreign_named_patient`` below
+# answers that by comparing against the caller-supplied bound name). Only
+# "patient" is matched case-insensitively (scoped inline flag, same trick as
+# ``_PAIRED_NAME_NUMBER_RE`` above); the name capture stays case-SENSITIVE.
+# The trailing negative lookahead excludes "patient id 452" / "patient ID 452"
+# (a NUMBER reference, ``_GUARD_PATIENT_NUMBER_RE`` above already handles it)
+# -- a captured word immediately followed by a number is not a name.
+_PATIENT_NAMED_RE = re.compile(
+    r"\b(?i:patient)\s+((?:[A-Z][A-Za-z'\-]*\s+){0,2}[A-Z][A-Za-z'\-]*)\b(?!\s*#?\d)"
+)
 
-def detect_foreign_patient_reference(question: str, bound_patient_id: int) -> bool:
-    """Deterministic PRE-dispatch guard (#223): does ``question`` explicitly
-    reference a DIFFERENT patient than ``bound_patient_id`` by NUMBER?
+# #224 name-binding: the DANGEROUS "switch (over) to <Name>" construction --
+# this is exactly the one #223 had to remove because a bare capitalized word
+# after "switch to" collides with a drug name ("switch to Lisinopril"). Two
+# restrictions bring it back safely, both REQUIRED:
+#   1. The name capture here requires TWO OR THREE capitalized words (unlike
+#      ``_PATIENT_NAMED_RE`` above), which excludes virtually every real drug
+#      name in casual clinical shorthand -- they are single tokens
+#      (Lisinopril, Coumadin, Ozempic, Metformin, ...). See
+#      ``detect_foreign_patient_reference``'s docstring for the accepted
+#      residual risk this does not close.
+#   2. That alone is still not enough (a two-word OTC name like "Plan B"
+#      exists) -- ``detect_foreign_patient_reference`` additionally requires
+#      ``_POSSESSIVE_CLINICAL_RE`` to match somewhere AFTER this construction,
+#      i.e. the question goes on to ask about "his/her/their <clinical
+#      noun>" -- the way a clinician naturally continues after naming a
+#      DIFFERENT patient by name, and not how a same-patient medication
+#      switch is normally phrased.
+_SWITCH_TO_NAME_RE = re.compile(
+    r"\b(?i:switch(?:ing)?\s+(?:over\s+)?to)\s+((?:[A-Z][A-Za-z'\-]*\s+){1,2}[A-Z][A-Za-z'\-]*)\b"
+)
+
+# Third-person-possessive clinical request: "his/her/their <clinical noun>"
+# immediately adjacent (deliberately tight, not "anywhere later in the
+# question", to keep the combined signal narrow) -- the stronger signal
+# ``_SWITCH_TO_NAME_RE`` needs before it counts as a patient retarget rather
+# than an ordinary medication switch. See ``_SWITCH_TO_NAME_RE`` above.
+_POSSESSIVE_CLINICAL_RE = re.compile(
+    r"\b(?:his|her|their)\s+(?:drug\s+)?(?:allerg(?:y|ies)|medications?|meds|drugs|"
+    r"prescriptions?|lab(?:\s+results?)?s?|vitals?|problems?|conditions?|"
+    r"appointments?|encounters?)\b",
+    re.IGNORECASE,
+)
+
+
+def _same_named_patient(candidate: str, bound_patient_name: str) -> bool:
+    """Whether ``candidate`` (a name captured from the question) refers to the
+    SAME patient as ``bound_patient_name`` -- an exact case-insensitive match
+    (full name), or ``candidate`` is a single word that is itself one of
+    ``bound_patient_name``'s own words (a clinician referring to the
+    currently-open patient by first name only: "patient Wanda" when the bound
+    patient is "Wanda Moore")."""
+    candidate_cf = candidate.strip().casefold()
+    bound_cf = bound_patient_name.strip().casefold()
+    if candidate_cf == bound_cf:
+        return True
+    return candidate_cf in bound_cf.split()
+
+
+def _is_foreign_named_patient(question: str, bound_patient_name: str | None) -> bool:
+    """The "patient <Name>" signal (see ``_PATIENT_NAMED_RE``): ``True`` when
+    the question names a patient via this construction and that name is NOT
+    the bound patient. Skipped entirely (returns ``False``) when
+    ``bound_patient_name`` is unknown -- with nothing to compare against, the
+    fail-safe posture is to not fire (same bias as the rest of this guard:
+    a wrongly-refused legitimate question is worse than a missed refusal)."""
+    if bound_patient_name is None:
+        return False
+    return any(
+        not _same_named_patient(match.group(1), bound_patient_name)
+        for match in _PATIENT_NAMED_RE.finditer(question)
+    )
+
+
+def _is_foreign_switch_to_name(question: str, bound_patient_name: str | None) -> bool:
+    """The "switch (over) to <Name>" signal (see ``_SWITCH_TO_NAME_RE``):
+    ``True`` only when a 2-3 word capitalized name follows the switch/retarget
+    verb phrase, that name is NOT the bound patient, AND the REST of the
+    question (after the match) goes on to ask about that person in the third
+    person via ``_POSSESSIVE_CLINICAL_RE``. Skipped entirely when
+    ``bound_patient_name`` is unknown, same fail-safe posture as
+    ``_is_foreign_named_patient`` above."""
+    if bound_patient_name is None:
+        return False
+    match = _SWITCH_TO_NAME_RE.search(question)
+    if match is None:
+        return False
+    if _same_named_patient(match.group(1), bound_patient_name):
+        return False
+    return _POSSESSIVE_CLINICAL_RE.search(question, match.end()) is not None
+
+
+def detect_foreign_patient_reference(
+    question: str, bound_patient_id: int, bound_patient_name: str | None = None
+) -> bool:
+    """Deterministic PRE-dispatch guard (#223, extended by #224): does
+    ``question`` explicitly reference a DIFFERENT patient than
+    ``bound_patient_id``/``bound_patient_name``?
 
     This hardens #194's ``apply_subject_check`` above, which only runs AFTER
     ``Planner.run()`` has already dispatched tools and can merely rewrite the
@@ -624,20 +723,55 @@ def detect_foreign_patient_reference(question: str, bound_patient_id: int) -> bo
     ``runner.pipeline.run_case``) short-circuits to a refusal BEFORE the
     planner runs at all -- no tool dispatch, no model call.
 
-    The single signal is an explicit foreign patient NUMBER ("patient 999",
-    "patient #999", "patient id 999") whose value differs from the bound id,
-    via ``_GUARD_PATIENT_NUMBER_RE`` (which excludes dosing forms like "give
-    patient 2 tablets"). Name-based detection ("switch to <Name>") is
-    DELIBERATELY out of scope: a bare capitalized name cannot be told apart
-    from an ordinary clinical medication switch ("switch to Lisinopril") or a
-    named provider without knowing the bound patient's own name -- the same
-    name-binding problem deferred to #224. Detecting it here would wrongly
-    refuse routine clinical questions, a worse regression than the case it
-    would fix.
+    **Three signals, evaluated independently (any one firing is enough):**
+      1. An explicit foreign patient NUMBER ("patient 999", "patient #999",
+         "patient id 999") whose value differs from the bound id, via
+         ``_GUARD_PATIENT_NUMBER_RE`` (which excludes dosing forms like "give
+         patient 2 tablets"). Unconditional -- #223's original signal,
+         unchanged, needs no name.
+      2. "patient <Name>" (``_is_foreign_named_patient`` /
+         ``_PATIENT_NAMED_RE``) -- safe unconditionally on the construction
+         alone (nobody says "patient Lisinopril"), so this only needs to know
+         whether the named patient IS the bound one.
+      3. "switch (over) to <Name>" PLUS a later third-person-possessive
+         clinical ask (``_is_foreign_switch_to_name`` /
+         ``_SWITCH_TO_NAME_RE`` + ``_POSSESSIVE_CLINICAL_RE``) -- the
+         construction #223 removed entirely because a bare name collides
+         with a drug name ("switch to Lisinopril"). Brought back only with
+         BOTH a 2-3 word name (excludes virtually all single-word drug names)
+         AND the stronger following-possessive signal.
+
+    Signals 2 and 3 are evaluated ONLY when ``bound_patient_name`` is
+    supplied (resolved once per conversation -- see ``app.chat``'s
+    conversation-creation wiring and ``runner.pipeline.run_case``'s
+    ``case.patient_name``); with no bound name to compare against, both are
+    skipped and this function's behavior is byte-identical to #223 (numeric
+    only). This mirrors this guard's existing bias throughout: a wrongly
+    hard-refused legitimate clinical question is a worse regression than a
+    missed refusal.
+
+    **Accepted residual risk (documented, not solved):** signal 3's own
+    false-positive bar is the #223 incident itself ("switch to Lisinopril" /
+    "switch to Coumadin" / "switch to Ozempic" must never refuse) -- the
+    2-3 word name requirement closes that. It does NOT close every case: a
+    two-word OTC/brand name asked about in the third person for the CURRENT
+    patient -- e.g. "Switch to Plan B and tell me her allergies to it",
+    meaning the bound patient's own allergies -- would still misfire, because
+    a bare name and a two-word brand name are structurally identical to this
+    regex. This is a narrower, rarer collision than #223's (most drugs are
+    single-word; two-word brand names immediately followed by a third-person
+    possessive clinical ask in the SAME sentence is an uncommon phrasing), and
+    strictly safer than not having signal 3 at all -- but it is not
+    eliminated. A roster of the OTHER real patients on this facility (a
+    referenced name matching a real different patient is unambiguous; matching
+    none of them is never a patient reference) would close this precisely, but
+    is out of scope here -- see #224's spike notes for why.
     """
-    return any(
-        int(match.group(1)) != bound_patient_id for match in _GUARD_PATIENT_NUMBER_RE.finditer(question)
-    )
+    if any(int(match.group(1)) != bound_patient_id for match in _GUARD_PATIENT_NUMBER_RE.finditer(question)):
+        return True
+    if _is_foreign_named_patient(question, bound_patient_name):
+        return True
+    return _is_foreign_switch_to_name(question, bound_patient_name)
 
 
 _CROSS_PATIENT_REFUSAL_ANSWER = (

@@ -763,6 +763,89 @@ def test_detect_foreign_patient_reference_does_not_fire_on_a_name_based_retarget
     assert not detect_foreign_patient_reference("Can you switch over to Jane Doe and check her labs?", 1)
 
 
+# --------------------------------------------------------------------------
+# 8b. detect_foreign_patient_reference NAME-based signals (#224 name-binding).
+#
+# Two principled, general constructions, ONLY evaluated once the caller
+# supplies the bound patient's own name (``bound_patient_name``) -- with no
+# bound name, both signals are skipped entirely and behavior is byte-identical
+# to #223 (see the tests above, which pass no third argument and must keep
+# passing unchanged):
+#
+#   1. "patient <Name>" -- nobody says "patient Lisinopril", so this
+#      construction is safely treated as a genuine patient reference
+#      regardless of roster access; it is foreign whenever <Name> differs
+#      from the bound patient's own name.
+#   2. "switch (over) to <Name>" -- the dangerous construction (drug names
+#      collide), so it additionally REQUIRES a 2-3 word capitalized name
+#      (excludes virtually all single-word drug names: Lisinopril, Coumadin,
+#      Ozempic, Metformin, ...) AND a later third-person-possessive clinical
+#      request ("his/her/their <allergies/meds/labs/...>") -- never a bare
+#      name. This is the #223 gate's exact false-positive bar, re-verified
+#      below with the bound name now known.
+# --------------------------------------------------------------------------
+
+
+def test_detect_foreign_patient_reference_true_for_a_named_patient_construction():
+    assert detect_foreign_patient_reference(
+        "Does patient Maria Lopez have any lab abnormalities?", 3, "Wanda Moore"
+    )
+
+
+def test_detect_foreign_patient_reference_false_for_the_bound_patients_own_full_name_via_patient_construction():
+    assert not detect_foreign_patient_reference(
+        "Does patient Wanda Moore have any lab abnormalities?", 3, "Wanda Moore"
+    )
+
+
+def test_detect_foreign_patient_reference_false_for_the_bound_patients_own_first_name_via_patient_construction():
+    # A clinician commonly refers to the currently-open patient by first name
+    # only -- must not be treated as a different, foreign "Wanda".
+    assert not detect_foreign_patient_reference("Does patient Wanda have any allergies?", 3, "Wanda Moore")
+
+
+def test_detect_foreign_patient_reference_true_for_switch_to_name_with_possessive_clinical_followup():
+    assert detect_foreign_patient_reference(
+        "Switch over to Bob Smith and tell me his drug allergies.", 1, "Wanda Moore"
+    )
+
+
+def test_detect_foreign_patient_reference_false_for_switch_to_the_bound_patients_own_name():
+    assert not detect_foreign_patient_reference(
+        "Switch to Wanda Moore and tell me her allergies.", 1, "Wanda Moore"
+    )
+
+
+def test_detect_foreign_patient_reference_false_for_switch_to_name_without_a_possessive_clinical_followup():
+    # "switch to <Name>" alone, with no following his/her/their <clinical
+    # noun>, is not enough on its own -- e.g. a provider name with no
+    # clinical ask attached.
+    assert not detect_foreign_patient_reference("Switch over to Jane Doe for a second.", 1, "Wanda Moore")
+
+
+def test_detect_foreign_patient_reference_named_signals_are_skipped_when_bound_name_is_unknown():
+    # Fail-safe: without a resolved bound name, neither new signal fires --
+    # identical behavior to pre-#224 (#223 numeric-only).
+    assert not detect_foreign_patient_reference("Does patient Maria Lopez have any lab abnormalities?", 3)
+    assert not detect_foreign_patient_reference("Switch over to Bob Smith and tell me his drug allergies.", 1)
+
+
+# The #223 false-positive bar, re-verified with a bound name now KNOWN and
+# PASSED -- name-binding being active must never resurrect the clinical
+# med-switch false positive that #223 itself had to walk back.
+def test_detect_foreign_patient_reference_still_false_for_bare_medication_switches_with_bound_name_known():
+    assert not detect_foreign_patient_reference("Switch to Lisinopril.", 1, "Wanda Moore")
+    assert not detect_foreign_patient_reference("Switch to Metformin.", 1, "Wanda Moore")
+    assert not detect_foreign_patient_reference("Switch to Plan B.", 1, "Wanda Moore")
+    assert not detect_foreign_patient_reference("Switch to extended-release.", 1, "Wanda Moore")
+
+
+def test_detect_foreign_patient_reference_false_when_question_only_names_the_bound_patient_directly():
+    # No "patient" keyword, no "switch to" phrase -- just naming the
+    # currently-open patient directly -- never a signal on its own.
+    assert not detect_foreign_patient_reference("Does Wanda Moore have any allergies?", 1, "Wanda Moore")
+
+
 def test_cross_patient_refusal_result_has_no_dispatch_and_no_pii():
     result = cross_patient_refusal_result()
 
