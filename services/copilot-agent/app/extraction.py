@@ -669,6 +669,15 @@ _SWITCH_TO_NAME_RE = re.compile(
     r"\b(?i:switch(?:ing)?\s+(?:over\s+)?to)\s+((?:[A-Z][A-Za-z'\-]*\s+){1,2}[A-Z][A-Za-z'\-]*)\b"
 )
 
+# Trailing possessive on a captured candidate: "switch to Bob Smith's chart"
+# captures "Bob Smith's" (the ASCII apostrophe is inside the name char class
+# above, deliberately -- names like O'Brien need it), which would fail the
+# exact full-name comparisons below and silently bypass the refusal. Both
+# apostrophe forms: ASCII ' (what keyboards produce) and U+2019 ’ (what
+# smart-quote autocorrect produces; not in the char class, so the capture
+# already ends before it -- included here for symmetry/robustness).
+_POSSESSIVE_SUFFIX_RE = re.compile(r"['’]s$")
+
 
 def _matches_roster(candidate: str, roster: Sequence[str]) -> bool:
     """Whether ``candidate`` (a 2-3 word name captured from a "switch to
@@ -704,11 +713,17 @@ def _is_foreign_switch_to_name(
     "switch to <Name>" construction, or one that names the bound patient,
     never pays the roster round trip. ``roster_provider is None`` (no roster
     available) fail-safe SKIPS this signal entirely, same posture as
-    ``_is_foreign_named_patient`` with no bound name."""
+    ``_is_foreign_named_patient`` with no bound name.
+
+    A trailing possessive on the capture ("switch to Bob Smith's chart" ->
+    "Bob Smith's") is stripped via ``_POSSESSIVE_SUFFIX_RE`` BEFORE both
+    comparisons, so possessive phrasing neither bypasses the roster match
+    nor turns the bound patient's own name into an unknown candidate that
+    triggers a pointless roster fetch."""
     match = _SWITCH_TO_NAME_RE.search(question)
     if match is None:
         return False
-    candidate = match.group(1)
+    candidate = _POSSESSIVE_SUFFIX_RE.sub("", match.group(1).strip())
     if bound_patient_name is not None and _same_named_patient(candidate, bound_patient_name):
         return False
     if roster_provider is None:
