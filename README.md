@@ -31,7 +31,12 @@ builds on the one before it:
 2. [agentforge-2-evidence-agent](https://github.com/franciszver/agentforge-2-evidence-agent) — Multimodal Evidence Agent & Document RAG (continues this repo)
 3. [agentforge-3-redteam](https://github.com/franciszver/agentforge-3-redteam) — Adversarial Security & Red-Team Platform (attacks the Phase 2 Co-Pilot)
 
-*Phases 2 and 3 become public as the series is released.*
+*All three phases are public: this repo is released at
+[`v1.0`](https://github.com/franciszver/agentforge-1-clinical-copilot/releases/tag/v1.0),
+Phase 2 at
+[`v2.3.0`](https://github.com/franciszver/agentforge-2-evidence-agent/releases/tag/v2.3.0),
+and Phase 3 at
+[`v3.0.0`](https://github.com/franciszver/agentforge-3-redteam/releases/tag/v3.0.0).*
 
 ---
 
